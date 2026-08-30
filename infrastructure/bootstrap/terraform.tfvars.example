@@ -1,0 +1,5 @@
+folder_id = "b1gxxxxxxxxxxxxxxxxxxx"
+cloud_id  = "b1gxxxxxxxxxxxxxxxxxxx"
+bucket_name = "my-terraform-state-bucket"
+service_account_name = "terraform-sa"
+zone = "ru-central1-a"

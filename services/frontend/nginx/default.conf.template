@@ -1,0 +1,50 @@
+# services/frontend/nginx.conf
+
+server {
+    listen ${FRONTEND_PORT};
+    server_name localhost;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Основной блок для /momo-store/
+    location /momo-store/ {
+        alias /usr/share/nginx/html/;
+        try_files $uri $uri/ /momo-store/index.html;
+        
+        # Статика внутри /momo-store/
+        location ~* /momo-store/(js|css|static|img|fonts)/(.*)$ {
+            alias /usr/share/nginx/html/$1/$2;
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+        }
+    }
+
+    # API прокси (вне /momo-store/)
+    location /api/ {
+        proxy_pass http://backend:${BACKEND_PORT}/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Healthcheck
+    location /health {
+        proxy_pass http://backend:${BACKEND_PORT}/health;
+    }
+
+    # Metrics
+    location /metrics {
+        proxy_pass http://backend:${BACKEND_PORT}/metrics;
+    }
+
+    # Корень перенаправляет на /momo-store/
+    location = / {
+        return 301 /momo-store/;
+    }
+
+    # Все остальное
+    location / {
+        try_files $uri $uri/ /momo-store/index.html;
+    }
+}

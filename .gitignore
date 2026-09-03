@@ -17,5 +17,55 @@ vendor/
 .vscode/
 .DS_Store
 
-# Environment file
+# Environment variables
 .env
+.env.local
+.env.*.local
+*.env
+
+# Sensitive files
+*.pem
+*.key
+*.crt
+*.p12
+key.json
+keys.json
+*-key.json
+credentials.json
+*join-command.txt
+
+# Terraform files
+*.tfvars
+*.tfvars.json
+terraform.tfvars
+terraform.tfvars.json
+*.auto.tfvars
+*.auto.tfvars.json
+
+# Terraform state files
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Logs
+*.log
+*.tmp
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Kubernetes
+*kubeconfig
+*kubeconfig-*
+*.kubeconfig
+*.crt
+*.key
+*.pem
+**/secrets.yaml
+**/.kube/

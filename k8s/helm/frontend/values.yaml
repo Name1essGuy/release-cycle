@@ -1,0 +1,59 @@
+# Default values for frontend
+
+replicaCount: 1
+
+image:
+  repository: registry.gitlab.com/momo-store/frontend
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets:
+  - name: gitlab-registry
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 80
+
+ingress:
+  enabled: false
+  className: nginx
+  hosts:
+    - host: frontend.local
+      paths:
+        - path: /
+          pathType: Prefix
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+env:
+  - name: NODE_ENV
+    value: "production"
+  - name: API_URL
+    value: "http://backend:8080/api"
+
+configmap:
+  enabled: true
+  data:
+    NGINX_PORT: "80"
+    API_BASE_URL: "/api"
+
+probes:
+  liveness:
+    enabled: true
+    path: /
+    port: 80
+    initialDelaySeconds: 30
+    periodSeconds: 10
+  readiness:
+    enabled: true
+    path: /
+    port: 80
+    initialDelaySeconds: 5
+    periodSeconds: 5

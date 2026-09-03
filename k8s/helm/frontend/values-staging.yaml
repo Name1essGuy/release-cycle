@@ -1,0 +1,28 @@
+# Overrides for staging environment
+
+replicaCount: 2
+
+image:
+  tag: staging-latest
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+env:
+  - name: NODE_ENV
+    value: "staging"
+  - name: API_URL
+    value: "http://backend-staging:8080/api"
+
+ingress:
+  enabled: true
+  hosts:
+    - host: frontend.staging.example.com
+      paths:
+        - path: /
+          pathType: Prefix

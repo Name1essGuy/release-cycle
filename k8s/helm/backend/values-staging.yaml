@@ -1,0 +1,32 @@
+# Overrides for staging environment
+
+replicaCount: 2
+
+image:
+  tag: staging-latest
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+env:
+  - name: NODE_ENV
+    value: "staging"
+  - name: DATABASE_URL
+    value: "postgres://user:pass@postgres-staging:5432/db"
+
+configmap:
+  data:
+    LOG_LEVEL: "info"
+
+ingress:
+  enabled: true
+  hosts:
+    - host: backend.staging.example.com
+      paths:
+        - path: /api
+          pathType: Prefix

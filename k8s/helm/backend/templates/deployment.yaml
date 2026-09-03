@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "backend.fullname" . }}
+  labels:
+    {{- include "backend.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "backend.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "backend.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: {{ .Chart.Name }}
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - containerPort: {{ .Values.service.targetPort }}
+          name: http
+        env:
+          {{- toYaml .Values.env | nindent 10 }}
+        {{- if .Values.configmap.enabled }}
+        envFrom:
+        - configMapRef:
+            name: {{ include "backend.fullname" . }}-config
+        {{- end }}
+        {{- if .Values.secret.enabled }}
+        - secretRef:
+            name: {{ include "backend.fullname" . }}-secret
+        {{- end }}
+        {{- with .Values.probes }}
+        livenessProbe:
+          httpGet:
+            path: {{ .liveness.path }}
+            port: {{ .liveness.port }}
+          initialDelaySeconds: {{ .liveness.initialDelaySeconds }}
+          periodSeconds: {{ .liveness.periodSeconds }}
+        readinessProbe:
+          httpGet:
+            path: {{ .readiness.path }}
+            port: {{ .readiness.port }}
+          initialDelaySeconds: {{ .readiness.initialDelaySeconds }}
+          periodSeconds: {{ .readiness.periodSeconds }}
+        {{- end }}
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}

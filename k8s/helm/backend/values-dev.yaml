@@ -1,0 +1,32 @@
+# Overrides for dev environment
+
+replicaCount: 1
+
+image:
+  tag: dev-latest
+
+resources:
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+env:
+  - name: NODE_ENV
+    value: "development"
+  - name: DATABASE_URL
+    value: "postgres://user:pass@postgres-dev:5432/db"
+
+configmap:
+  data:
+    LOG_LEVEL: "debug"
+
+ingress:
+  enabled: true
+  hosts:
+    - host: backend.dev.local
+      paths:
+        - path: /api
+          pathType: Prefix

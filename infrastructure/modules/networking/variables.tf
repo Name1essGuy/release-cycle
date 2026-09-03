@@ -41,6 +41,18 @@ variable "api_allowed_cidrs" {
   default     = ["0.0.0.0/0"]
 }
 
+variable "pod_cidr" {
+  description = "CIDR-диапазон для подов Kubernetes (cluster_ipv4_range)"
+  type        = string
+  default     = "10.112.0.0/16"
+}
+
+variable "service_cidr" {
+  description = "CIDR-диапазон для сервисов Kubernetes (service_ipv4_range)"
+  type        = string
+  default     = "10.96.0.0/16"
+}
+
 variable "tags" {
   description = "Дополнительные теги для ресурсов"
   type        = map(string)

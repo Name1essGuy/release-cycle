@@ -6,209 +6,162 @@ terraform {
       source  = "yandex-cloud/yandex"
       version = "~> 0.100.0"
     }
-    null = {
-      source  = "hashicorp/null"
-      version = "~> 3.2.0"
-    }
   }
 }
 
 # ============================================================================
-# Данные об образе
+# Сервисные аккаунты
 # ============================================================================
 
-data "yandex_compute_image" "ubuntu" {
-  family = "ubuntu-2204-lts"
+resource "yandex_iam_service_account" "k8s_sa" {
+  name        = "${var.environment}-k8s-sa"
+  description = "Service account for Managed Kubernetes cluster"
+}
+
+resource "yandex_iam_service_account" "node_sa" {
+  name        = "${var.environment}-k8s-node-sa"
+  description = "Service account for Kubernetes nodes"
 }
 
 # ============================================================================
-# Control Plane нода
+# Роли сервисных аккаунтов
 # ============================================================================
 
-resource "yandex_compute_instance" "control_plane" {
-  name        = "${var.environment}-control-plane"
-  description = "Kubernetes control-plane node for ${var.environment}"
-  hostname    = "control-plane"
+resource "yandex_resourcemanager_folder_iam_member" "k8s_sa_roles" {
+  for_each = toset([
+    "k8s.clusters.agent",
+    "vpc.publicAdmin",
+    "load-balancer.admin",
+    "logging.writer",
+  ])
 
-  zone = var.zones[0]
+  folder_id = var.folder_id
+  role      = each.value
+  member    = "serviceAccount:${yandex_iam_service_account.k8s_sa.id}"
+}
 
-  platform_id = "standard-v3"
+resource "yandex_resourcemanager_folder_iam_member" "node_sa_roles" {
+  for_each = toset([
+    "container-registry.images.puller",
+  ])
 
-  resources {
-    cores         = 2
-    memory        = 4
-    core_fraction = 100
-  }
-
-  boot_disk {
-    initialize_params {
-      image_id = data.yandex_compute_image.ubuntu.id
-      type     = "network-hdd"
-      size     = var.control_plane_disk_size
-    }
-  }
-
-  network_interface {
-    subnet_id          = var.subnet_ids[0]
-    nat                = true
-    security_group_ids = [var.control_plane_security_group_id]
-  }
-
-  metadata = {
-    ssh-keys = "ubuntu:${var.ssh_public_key}"
-
-    user-data = templatefile("${path.module}/scripts/control-plane-setup.sh", {
-      kubernetes_version   = var.kubernetes_version
-      pod_network_cidr     = var.pod_network_cidr
-      service_network_cidr = var.service_network_cidr
-      cluster_name         = var.cluster_name
-      environment          = var.environment
-    })
-  }
-
-  labels = merge(
-    {
-      environment = var.environment
-      role        = "control-plane"
-      managed_by  = "terraform"
-      cluster     = var.cluster_name
-    },
-    var.tags
-  )
-
-  lifecycle {
-    ignore_changes = [
-      metadata["user-data"],
-    ]
-  }
+  folder_id = var.folder_id
+  role      = each.value
+  member    = "serviceAccount:${yandex_iam_service_account.node_sa.id}"
 }
 
 # ============================================================================
-# Получение join-команды с control-plane
+# Задержка для применения IAM-политик
 # ============================================================================
 
-resource "null_resource" "get_join_command" {
-  depends_on = [yandex_compute_instance.control_plane]
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      echo "⏳ Waiting for control-plane to be ready..."
-      sleep 60
-      
-      CONTROL_PLANE_IP="${yandex_compute_instance.control_plane.network_interface.0.nat_ip_address}"
-      echo "ℹ️ Control-plane IP: $CONTROL_PLANE_IP"
-      
-      # Проверка SSH-доступа
-      echo "🔍 Checking SSH access..."
-      ssh -o StrictHostKeyChecking=no -i ${var.ssh_private_key_path} ubuntu@$CONTROL_PLANE_IP "echo 'SSH OK'" 2>&1
-      
-      # Читаем /tmp/join-command.txt
-      for i in 1 2 3 4 5 6 7 8; do
-        echo "Attempt $i: Getting join command from control-plane..."
-        ssh -o StrictHostKeyChecking=no -i ${var.ssh_private_key_path} ubuntu@$CONTROL_PLANE_IP "sudo cat /tmp/join-command.txt" > ./join-command.txt 2>/dev/null
-        if [ -s ./join-command.txt ]; then
-          echo "✅ Join command received!"
-          cat ./join-command.txt
-          break
-        fi
-        echo "⚠️ Failed attempt $i, waiting 10 seconds..."
-        sleep 30
-      done
-      
-      if [ ! -s ./join-command.txt ]; then
-        echo "❌ Failed to get join command after 10 attempts"
-        echo "📋 Manual join command (run on control-plane):"
-        echo "  sudo cat /tmp/join-command.txt"
-        exit 1
-      fi
-    EOT
-  }
-}
-
-# ============================================================================
-# Чтение join-команды из локального файла
-# ============================================================================
-
-data "local_file" "join_command" {
-  depends_on = [null_resource.get_join_command]
-  filename   = "./join-command.txt"
-}
-
-# ============================================================================
-# Worker ноды
-# ============================================================================
-
-resource "yandex_compute_instance" "workers" {
-  count = var.worker_count
-
-  name        = "${var.environment}-worker-${count.index + 1}"
-  description = "Kubernetes worker node ${count.index + 1} for ${var.environment}"
-  hostname    = "worker-${count.index + 1}"
-
-  zone = var.zones[count.index % length(var.zones)]
-
-  platform_id = "standard-v3"
-
-  resources {
-    cores         = 2
-    memory        = 4
-    core_fraction = 100
-  }
-
-  boot_disk {
-    initialize_params {
-      image_id = data.yandex_compute_image.ubuntu.id
-      type     = "network-hdd"
-      size     = var.worker_disk_size
-    }
-  }
-
-  network_interface {
-    subnet_id          = var.subnet_ids[count.index % length(var.subnet_ids)]
-    nat                = true
-    security_group_ids = [var.workers_security_group_id]
-  }
-
-  metadata = {
-    ssh-keys = "ubuntu:${var.ssh_public_key}"
-
-    user-data = templatefile("${path.module}/scripts/worker-setup.sh", {
-      kubernetes_version = var.kubernetes_version
-      control_plane_ip   = yandex_compute_instance.control_plane.network_interface.0.ip_address
-      environment        = var.environment
-      join_command       = data.local_file.join_command.content
-    })
-  }
-
-  labels = merge(
-    {
-      environment = var.environment
-      role        = "worker"
-      managed_by  = "terraform"
-      cluster     = var.cluster_name
-    },
-    var.tags
-  )
+resource "time_sleep" "wait_for_iam" {
+  create_duration = "5s"
 
   depends_on = [
-    yandex_compute_instance.control_plane,
-    null_resource.get_join_command
+    yandex_resourcemanager_folder_iam_member.k8s_sa_roles,
+    yandex_resourcemanager_folder_iam_member.node_sa_roles,
   ]
-
-  lifecycle {
-    ignore_changes = [
-      metadata["user-data"],
-    ]
-  }
 }
 
 # ============================================================================
-# Выходные данные для получения kubeconfig
+# Управляемый кластер Kubernetes
 # ============================================================================
 
-locals {
-  control_plane_ip     = yandex_compute_instance.control_plane.network_interface.0.ip_address
-  control_plane_nat_ip = yandex_compute_instance.control_plane.network_interface.0.nat_ip_address
-  worker_ips           = yandex_compute_instance.workers[*].network_interface.0.ip_address
-  worker_nat_ips       = yandex_compute_instance.workers[*].network_interface.0.nat_ip_address
+resource "yandex_kubernetes_cluster" "this" {
+  name        = "${var.environment}-managed-k8s"
+  description = "Managed Kubernetes cluster for ${var.environment}"
+  network_id  = var.network_id
+
+  master {
+    version = var.k8s_version
+    zonal {
+      zone      = var.zone
+      subnet_id = var.subnet_id
+    }
+
+    public_ip = true
+
+    security_group_ids = [var.cluster_security_group_id]
+
+    master_logging {
+      enabled = true
+    }
+  }
+
+  service_account_id      = yandex_iam_service_account.k8s_sa.id
+  node_service_account_id = yandex_iam_service_account.node_sa.id
+
+  network_policy_provider = "CALICO"
+  release_channel         = "STABLE"
+
+  # 👈 КРИТИЧНО: ждём применения IAM-ролей
+  depends_on = [
+    time_sleep.wait_for_iam,
+  ]
+}
+
+# ============================================================================
+# Группа узлов
+# ============================================================================
+
+resource "yandex_kubernetes_node_group" "workers" {
+  cluster_id  = yandex_kubernetes_cluster.this.id
+  name        = "${var.environment}-worker-group"
+  description = "Worker node group for ${var.environment}"
+  version     = var.k8s_version
+
+  labels = {
+    environment = var.environment
+  }
+
+  scale_policy {
+    fixed_scale {
+      size = var.worker_count
+    }
+  }
+
+  allocation_policy {
+    location {
+      zone = var.zone
+    }
+  }
+
+  instance_template {
+    platform_id = "standard-v3"
+
+    network_interface {
+      nat                = true
+      subnet_ids         = [var.subnet_id]
+      security_group_ids = [var.worker_security_group_id]
+    }
+
+    resources {
+      cores  = var.worker_cores
+      memory = var.worker_memory
+    }
+
+    boot_disk {
+      type = "network-hdd"
+      size = var.worker_disk_size
+    }
+
+    container_runtime {
+      type = "containerd"
+    }
+
+    scheduling_policy {
+      preemptible = false
+    }
+  }
+
+  maintenance_policy {
+    auto_upgrade = true
+    auto_repair  = true
+
+    maintenance_window {
+      day        = "monday"
+      start_time = "15:00"
+      duration   = "3h"
+    }
+  }
 }

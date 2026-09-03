@@ -1,47 +1,43 @@
 # ============================================
-# service/backcend/Dockerfile
+# services/backend/Dockerfile
 # ============================================
 
-# ============ ЭТАП 1: Зависимости ============
-FROM golang:1.23.0-alpine3.20 AS deps
+# ============ ЭТАП 1: Prod зависимости ============
+FROM golang:1.25-alpine AS deps
 
 WORKDIR /app
 
-# Копируем go.mod и go.sum
 COPY go.mod go.sum ./
 RUN go mod download
 
-# ============ ЭТАП 2: Сборка ============
+# ============ ЭТАП 2: Сборка бинарника (PROD) ============
 FROM deps AS builder
 
-# Аргументы для сборки
 ARG BACKEND_VERSION
 
-# Копируем код
 COPY . .
 
-# Собираем бинарник
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags="-w -s -X main.version=${BACKEND_VERSION:-1.1.0}" \
     -o api \
     ./cmd/api
 
-# ============ ЭТАП 3: Финальный образ ============
-FROM alpine:3.20
+# ============ ЭТАП 3: Финальный образ (PROD) ============
+FROM alpine:3.20 AS production
 
 ARG BACKEND_PORT=8081
 
-# Устанавливаем пакеты и создаем пользователя в одном RUN
+ENV BACKEND_PORT=${BACKEND_PORT}
+ENV NODE_ENV=production
+
 RUN apk --no-cache add ca-certificates curl wget && \
     addgroup -g 1000 -S appgroup && \
     adduser -u 1000 -S appuser -G appgroup
 
 WORKDIR /app
 
-# Копируем бинарник
 COPY --from=builder /app/api .
 
-# Меняем владельца
 RUN chown -R appuser:appgroup /app
 
 USER appuser
@@ -49,6 +45,23 @@ USER appuser
 EXPOSE ${BACKEND_PORT}
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:8081/health || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://localhost:${BACKEND_PORT:-8081}/health || exit 1
 
 CMD ["./api"]
+
+# ============ ЭТАП 4: Dev-режим (без hot-reload) ============
+FROM deps AS development
+
+ARG BACKEND_PORT=8081
+
+ENV BACKEND_PORT=${BACKEND_PORT}
+ENV NODE_ENV=development
+
+COPY . .
+
+EXPOSE ${BACKEND_PORT}
+
+CMD ["sh", "-c", "go run ./cmd/api"]
+
+# ============ ЦЕЛЬ ПО УМОЛЧАНИЮ: PROD ============
+FROM production

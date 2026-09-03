@@ -14,28 +14,33 @@ output "subnet_ids" {
   value       = module.networking.subnet_ids
 }
 
+output "ingress_lb_security_group_id" {
+  description = "ID security group для Ingress LoadBalancer"
+  value       = module.networking.ingress_lb_security_group_id
+}
+
+output "workers_security_group_id" {
+  description = "ID security group для worker нод"
+  value       = module.networking.workers_security_group_id
+}
+
+output "control_plane_security_group_id" {
+  description = "ID security group для control-plane нод"
+  value       = module.networking.control_plane_security_group_id
+}
+
 # ============================================================================
 # Выходные данные Kubernetes кластера
 # ============================================================================
 
-output "control_plane_ip" {
-  description = "Внутренний IP control-plane"
-  value       = module.kubernetes_cluster.control_plane_ip
+output "cluster_id" {
+  description = "ID управляемого кластера Kubernetes"
+  value       = module.kubernetes_cluster.cluster_id
 }
 
-output "control_plane_nat_ip" {
-  description = "Публичный IP control-plane"
-  value       = module.kubernetes_cluster.control_plane_nat_ip
-}
-
-output "worker_ips" {
-  description = "Список внутренних IP worker нод"
-  value       = module.kubernetes_cluster.worker_ips
-}
-
-output "worker_nat_ips" {
-  description = "Список публичных IP worker нод"
-  value       = module.kubernetes_cluster.worker_nat_ips
+output "cluster_name" {
+  description = "Имя кластера"
+  value       = module.kubernetes_cluster.cluster_name
 }
 
 output "cluster_endpoint" {
@@ -43,14 +48,29 @@ output "cluster_endpoint" {
   value       = module.kubernetes_cluster.cluster_endpoint
 }
 
-output "get_kubeconfig_command" {
-  description = "Команда для получения kubeconfig"
-  value       = module.kubernetes_cluster.get_kubeconfig_command
+output "cluster_ca_certificate" {
+  description = "CA-сертификат кластера"
+  value       = module.kubernetes_cluster.cluster_ca_certificate
+  sensitive   = true
 }
 
-output "ssh_control_plane_command" {
-  description = "Команда для SSH на control-plane"
-  value       = module.kubernetes_cluster.ssh_control_plane_command
+output "node_group_id" {
+  description = "ID группы узлов"
+  value       = module.kubernetes_cluster.node_group_id
+}
+
+output "node_group_name" {
+  description = "Имя группы узлов"
+  value       = module.kubernetes_cluster.node_group_name
+}
+
+# ============================================================================
+# Команда для получения kubeconfig
+# ============================================================================
+
+output "get_kubeconfig_command" {
+  description = "Команда для получения kubeconfig управляемого кластера"
+  value       = "yc managed-kubernetes cluster get-credentials --name ${module.kubernetes_cluster.cluster_name} --external --force"
 }
 
 # ============================================================================
@@ -65,21 +85,4 @@ output "gitlab_runner_ip" {
 output "gitlab_runner_ssh" {
   description = "Команда для SSH на GitLab Runner"
   value       = local.environment != "dev" ? module.gitlab_runner[0].ssh : null
-}
-
-# ============================================================================
-# Информация о кластере
-# ============================================================================
-
-output "cluster_info" {
-  description = "Общая информация о кластере"
-  value = {
-    environment       = local.environment
-    worker_count      = var.worker_count[local.environment]
-    control_plane_ip  = module.kubernetes_cluster.control_plane_ip
-    control_plane_nat = module.kubernetes_cluster.control_plane_nat_ip
-    cluster_endpoint  = module.kubernetes_cluster.cluster_endpoint
-    has_gitlab_runner = local.environment != "dev"
-    gitlab_runner_ip  = local.environment != "dev" ? module.gitlab_runner[0].ip : null
-  }
 }

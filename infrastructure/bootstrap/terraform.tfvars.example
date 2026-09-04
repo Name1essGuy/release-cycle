@@ -1,5 +1,8 @@
-folder_id = "b1gxxxxxxxxxxxxxxxxxxx"
-cloud_id  = "b1gxxxxxxxxxxxxxxxxxxx"
-bucket_name = "my-terraform-state-bucket"
-service_account_name = "terraform-sa"
-zone = "ru-central1-a"
+# bootstrap/terraform.tfvars.example
+
+cloud_id              = "b1gxxxxxxxxxxxxxxxxxxx"
+folder_id             = "b1gxxxxxxxxxxxxxxxxxxx"
+bucket_name           = "my-terraform-state-bucket"
+registry_name         = "momo-store-registry"
+service_account_name  = "terraform-sa"
+zone                  = "ru-central1-a"

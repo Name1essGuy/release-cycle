@@ -1,41 +1,60 @@
 # bootstrap/main.tf
 
-# 1. Создаем сервисный аккаунт
-resource "yandex_iam_service_account" "state_sa" {
-  name        = var.service_account_name
-  description = "Сервисный аккаунт для доступа к S3 бакету с Terraform state"
+terraform {
+  required_version = ">= 1.5.0"
 }
 
-# 2. Назначаем роль сервисному аккаунту
+# ============================================================================
+# 1. Создание сервисного аккаунта
+# ============================================================================
+
+resource "yandex_iam_service_account" "state_sa" {
+  name        = var.service_account_name
+  description = "Сервисный аккаунт для Terraform и Container Registry"
+}
+
+# ============================================================================
+# 2. Назначение ролей сервисному аккаунту
+# ============================================================================
+
 resource "yandex_resourcemanager_folder_iam_member" "storage_editor" {
   folder_id = var.folder_id
-  role      = "storage.admin"
+  role      = "storage.editor"
   member    = "serviceAccount:${yandex_iam_service_account.state_sa.id}"
 }
 
-# 3. Создаем статический ключ доступа для сервисного аккаунта
-resource "yandex_iam_service_account_static_access_key" "state_sa_key" {
-  service_account_id = yandex_iam_service_account.state_sa.id
-  description        = "Статический ключ доступа к S3 бакету с Terraform state"
+resource "yandex_resourcemanager_folder_iam_member" "container_registry_editor" {
+  folder_id = var.folder_id
+  role      = "container-registry.editor"
+  member    = "serviceAccount:${yandex_iam_service_account.state_sa.id}"
 }
 
-# 4. Создаем S3-бакет
+# ============================================================================
+# 3. Создание статического ключа доступа
+# ============================================================================
+
+resource "yandex_iam_service_account_static_access_key" "state_sa_key" {
+  service_account_id = yandex_iam_service_account.state_sa.id
+  description        = "Static access key for Terraform state bucket"
+}
+
+# ============================================================================
+# 4. Создание S3-бакета для состояния
+# ============================================================================
+
 resource "yandex_storage_bucket" "terraform_state" {
   bucket     = var.bucket_name
-  max_size   = 10737418240 # 10 GB
-  access_key = yandex_iam_service_account_static_access_key.state_sa_key.access_key
-  secret_key = yandex_iam_service_account_static_access_key.state_sa_key.secret_key
+  max_size   = 10737418240
+  #access_key = yandex_iam_service_account_static_access_key.state_sa_key.access_key
+  #secret_key = yandex_iam_service_account_static_access_key.state_sa_key.secret_key
 
-  # Включаем версионирование для защиты от случайного удаления
   versioning {
     enabled = true
   }
 
-  # Настраиваем lifecycle политику
   lifecycle_rule {
     id      = "expire-old-versions"
     enabled = true
-
     expiration {
       days = 30
     }
@@ -48,8 +67,33 @@ resource "yandex_storage_bucket" "terraform_state" {
   }
 }
 
-# 5. Создаем статический ключ для пользователя (для ручного доступа)
-resource "yandex_iam_service_account_static_access_key" "user_key" {
+# ============================================================================
+# 5. Создание Container Registry
+# ============================================================================
+
+resource "yandex_container_registry" "main" {
+  name      = var.registry_name
+  folder_id = var.folder_id
+  labels = {
+    environment = "bootstrap"
+    managed_by  = "terraform"
+  }
+}
+
+# ============================================================================
+# 6. Создание статического ключа для Docker
+# ============================================================================
+
+resource "yandex_iam_service_account_static_access_key" "docker_key" {
   service_account_id = yandex_iam_service_account.state_sa.id
-  description        = "Статический пользоватлеьский ключ для ручных операций"
+  description        = "Docker registry access key"
+}
+
+# ============================================================================
+# 7. Создание ключа для сервисного аккаунта Terraform
+# ============================================================================
+
+resource "yandex_iam_service_account_key" "terraform_sa_key" {
+  service_account_id = yandex_iam_service_account.state_sa.id
+  description        = "Authorized key for Terraform"
 }

@@ -1,13 +1,25 @@
 # bootstrap/variables.tf
 
+variable "cloud_id" {
+  description = "ID облака в Yandex Cloud"
+  type        = string
+}
+
 variable "folder_id" {
   description = "ID каталога в Yandex Cloud"
   type        = string
 }
 
-variable "cloud_id" {
-  description = "ID облака в Yandex Cloud"
+variable "bucket_name" {
+  description = "Имя S3-бакета для хранения state-файлов"
   type        = string
+  default     = "my-terraform-state-bucket"
+}
+
+variable "registry_name" {
+  description = "Имя Container Registry"
+  type        = string
+  default     = "momo-store-registry"
 }
 
 variable "service_account_name" {
@@ -16,14 +28,8 @@ variable "service_account_name" {
   default     = "terraform-sa"
 }
 
-variable "bucket_name" {
-  description = "Имя S3-бакета"
-  type        = string
-  default     = "my-terraform-state-bucket"
-}
-
 variable "zone" {
-  description = "Зона доступности"
+  description = "Зона доступности по умолчанию"
   type        = string
   default     = "ru-central1-a"
 }

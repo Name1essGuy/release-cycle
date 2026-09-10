@@ -3,13 +3,12 @@
 replicaCount: 1
 
 image:
-  repository: registry.gitlab.com/momo-store/frontend
+  repository: cr.yandex/crpcti5ji1nf9q4ofu6j/frontend
   tag: latest
   pullPolicy: IfNotPresent
 
 imagePullSecrets:
-  - name: gitlab-registry
-
+  - name: ycr-secret
 service:
   type: ClusterIP
   port: 80
@@ -57,3 +56,8 @@ probes:
     port: 80
     initialDelaySeconds: 5
     periodSeconds: 5
+
+secret:
+  enabled: false
+  # data:
+  #   API_KEY: "base64-encoded-value"

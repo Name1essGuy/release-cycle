@@ -95,9 +95,6 @@ terraform output -json > outputs.json
 
 # Получить URL Container Registry
 terraform output registry_url
-
-# Получить Access Key для Docker
-terraform output docker_access_key
 ```
 
 ### Шаг 6: Настройте Docker для работы с Container Registry
@@ -105,11 +102,6 @@ terraform output docker_access_key
 ```bash
 # Аутентификация через Yandex Cloud CLI
 yc container registry configure-docker
-
-# Или через статический ключ
-export DOCKER_ACCESS_KEY=$(terraform output -raw docker_access_key)
-export DOCKER_SECRET_KEY=$(terraform output -raw docker_secret_key)
-docker login -u json_key --password-stdin cr.yandex <<< "$DOCKER_SECRET_KEY"
 ```
 
 ## 📤 Выходные данные

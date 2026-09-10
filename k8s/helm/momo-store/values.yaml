@@ -1,0 +1,108 @@
+# Global settings
+global:
+  namespace: momo-store
+  imagePullSecrets:
+    - name: ycr-secret
+
+# Backend settings
+backend:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: cr.yandex/crpcti5ji1nf9q4ofu6j/backend
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8081
+    targetPort: 8081
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+  env:
+    - name: NODE_ENV
+      value: "production"
+  configmap:
+    enabled: true
+    data:
+      LOG_LEVEL: "info"
+      API_PORT: "8081"
+  probes:
+    liveness:
+      path: /health
+      port: 8081
+      initialDelaySeconds: 30
+      periodSeconds: 10
+    readiness:
+      path: /health
+      port: 8081
+      initialDelaySeconds: 5
+      periodSeconds: 5
+
+# Frontend settings
+frontend:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: cr.yandex/crpcti5ji1nf9q4ofu6j/frontend
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: LoadBalancer
+    port: 80
+    targetPort: 80
+    annotations:
+      yandex.cloud/load-balancer-type: "external"
+      yandex.cloud/subnet-id: "e9b1hxxxxxxxxxxxxx"
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+  env:
+    - name: NODE_ENV
+      value: "production"
+    - name: API_URL
+      value: "http://momo-store-backend:8081/api"
+  configmap:
+    enabled: true
+    data:
+      NGINX_PORT: "80"
+      API_BASE_URL: "/api"
+  probes:
+    liveness:
+      path: /
+      port: 80
+      initialDelaySeconds: 30
+      periodSeconds: 10
+    readiness:
+      path: /
+      port: 80
+      initialDelaySeconds: 5
+      periodSeconds: 5
+
+# Ingress settings
+ingress:
+  enabled: false
+  className: nginx
+  hosts:
+    - host: momo-store.local
+      paths:
+        - path: /
+          pathType: Prefix
+          service: frontend
+          port: 80
+        - path: /api
+          pathType: Prefix
+          service: backend
+          port: 8081
+
+# Secret settings
+secret:
+  enabled: false

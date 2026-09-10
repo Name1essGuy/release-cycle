@@ -1,0 +1,39 @@
+# Overrides for staging environment
+
+global:
+  imagePullSecrets:
+    - name: ycr-secret
+
+backend:
+  replicaCount: 1
+  image:
+    tag: 1.1.0
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi
+
+frontend:
+  replicaCount: 1
+  image:
+    tag: 1.1.0
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 80
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi
+  env:
+    - name: API_URL
+      value: "http://momo-store-backend:8081/api"
+
+ingress:
+  enabled: false

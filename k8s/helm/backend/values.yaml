@@ -3,12 +3,12 @@
 replicaCount: 1
 
 image:
-  repository: registry.gitlab.com/momo-store/backend
+  repository: cr.yandex/crpcti5ji1nf9q4ofu6j/backend
   tag: latest
   pullPolicy: IfNotPresent
 
 imagePullSecrets:
-  - name: gitlab-registry
+  - name: ycr-secret
 
 service:
   type: ClusterIP
@@ -53,12 +53,12 @@ probes:
   liveness:
     enabled: true
     path: /health
-    port: 8080
+    port: 8081
     initialDelaySeconds: 30
     periodSeconds: 10
   readiness:
     enabled: true
     path: /health
-    port: 8080
+    port: 8081
     initialDelaySeconds: 5
     periodSeconds: 5

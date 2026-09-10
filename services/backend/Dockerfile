@@ -31,6 +31,8 @@ FROM alpine:3.20
 
 ARG BACKEND_PORT=8081
 
+ENV BACKEND_PORT=${BACKEND_PORT}
+
 # Устанавливаем пакеты и создаем пользователя в одном RUN
 RUN apk --no-cache add ca-certificates curl wget && \
     addgroup -g 1000 -S appgroup && \
@@ -49,6 +51,6 @@ USER appuser
 EXPOSE ${BACKEND_PORT}
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:8081/health || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://localhost:${BACKEND_PORT:-8081}/health || exit 1
 
 CMD ["./api"]

@@ -1,0 +1,22 @@
+{{- if .Values.frontend.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "momo-store.fullname" . }}-frontend
+  labels:
+    app: frontend
+    {{- include "momo-store.labels" . | nindent 4 }}
+{{- if .Values.frontend.service.annotations }}
+  annotations:
+    {{- toYaml .Values.frontend.service.annotations | nindent 4 }}
+{{- end }}
+spec:
+  type: {{ .Values.frontend.service.type }}
+  ports:
+  - port: {{ .Values.frontend.service.port }}
+    targetPort: {{ .Values.frontend.service.targetPort }}
+    protocol: TCP
+    name: http
+  selector:
+    app: frontend
+{{- end }}

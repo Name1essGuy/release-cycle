@@ -1,0 +1,11 @@
+{{- if and .Values.backend.enabled .Values.backend.configmap.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "momo-store.fullname" . }}-backend-config
+  labels:
+    app: backend
+    {{- include "momo-store.labels" . | nindent 4 }}
+data:
+  {{- toYaml .Values.backend.configmap.data | nindent 2 }}
+{{- end }}

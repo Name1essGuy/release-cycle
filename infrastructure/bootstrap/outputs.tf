@@ -20,6 +20,16 @@ output "registry_url" {
   value       = "cr.yandex/${yandex_container_registry.main.id}"
 }
 
+output "frontend_bucket_name" {
+  description = "Имя бакета для статики фронтенда"
+  value       = yandex_storage_bucket.frontend_static.bucket
+}
+
+output "frontend_bucket_url" {
+  description = "URL бакета для статики фронтенда"
+  value       = "https://${yandex_storage_bucket.frontend_static.bucket}.website.yandexcloud.net"
+}
+
 output "service_account_id" {
   description = "ID созданного сервисного аккаунта"
   value       = yandex_iam_service_account.state_sa.id

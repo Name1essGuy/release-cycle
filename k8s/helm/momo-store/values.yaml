@@ -9,7 +9,7 @@ backend:
   enabled: true
   replicaCount: 1
   image:
-    repository: cr.yandex/crpcti5ji1nf9q4ofu6j/backend
+    repository: cr.yandex/crpcti5ji1nf9q4ofu6j/momo-store-backend
     tag: latest
     pullPolicy: IfNotPresent
   service:
@@ -48,7 +48,7 @@ frontend:
   enabled: true
   replicaCount: 1
   image:
-    repository: cr.yandex/crpcti5ji1nf9q4ofu6j/frontend
+    repository: cr.yandex/crpcti5ji1nf9q4ofu6j/momo-store-frontend
     tag: latest
     pullPolicy: IfNotPresent
   service:

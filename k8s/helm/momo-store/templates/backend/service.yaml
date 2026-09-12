@@ -4,15 +4,18 @@ kind: Service
 metadata:
   name: {{ include "momo-store.fullname" . }}-backend
   labels:
-    app: backend
     {{- include "momo-store.labels" . | nindent 4 }}
+  {{- with .Values.backend.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   type: {{ .Values.backend.service.type }}
   ports:
-  - port: {{ .Values.backend.service.port }}
-    targetPort: {{ .Values.backend.service.targetPort }}
-    protocol: TCP
-    name: http
+    - port: {{ .Values.backend.service.port }}
+      targetPort: {{ .Values.backend.service.targetPort }}
+      protocol: TCP
+      name: http
   selector:
-    app: backend
+    {{- include "momo-store.selectorLabels" . | nindent 4 }}
 {{- end }}

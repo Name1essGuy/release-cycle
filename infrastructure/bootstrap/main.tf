@@ -29,6 +29,12 @@ resource "yandex_resourcemanager_folder_iam_member" "container_registry_editor" 
   member    = "serviceAccount:${yandex_iam_service_account.state_sa.id}"
 }
 
+resource "yandex_resourcemanager_folder_iam_member" "load_balancer_editor" {
+  folder_id = var.folder_id
+  role      = "load-balancer.admin"
+  member    = "serviceAccount:${yandex_iam_service_account.state_sa.id}"
+}
+
 # ============================================================================
 # 3. Создание статического ключа доступа
 # ============================================================================
@@ -65,6 +71,46 @@ resource "yandex_storage_bucket" "terraform_state" {
     ManagedBy   = "terraform"
     Purpose     = "terraform-state-storage"
   }
+}
+
+# ============================================================================
+# 5. Создание S3-бакета для статики
+# ============================================================================
+
+resource "yandex_storage_bucket" "frontend_static" {
+  bucket = var.frontend_bucket_name
+
+  # Анонимный доступ: чтение и просмотр списка объектов
+  anonymous_access_flags {
+    read = true
+    list = false
+  }
+
+  # Настройка хостинга статического сайта
+  website {
+    index_document = "index.html"
+    error_document = "index.html"
+  }
+
+  # Версионирование отключено (статика обновляется часто)
+  versioning {
+    enabled = false
+  }
+
+  tags = {
+    environment = "shared"
+    managed_by  = "terraform"
+    purpose     = "frontend-static-hosting"
+  }
+}
+
+# Публичный доступ к объектам
+resource "yandex_storage_bucket_iam_binding" "frontend_public" {
+  bucket = yandex_storage_bucket.frontend_static.bucket
+  role   = "storage.viewer"
+  members = [
+    "system:allUsers"
+  ]
 }
 
 # ============================================================================

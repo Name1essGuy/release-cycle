@@ -28,6 +28,12 @@ variable "service_account_name" {
   default     = "terraform-sa"
 }
 
+variable "frontend_bucket_name" {
+  description = "Имя бакета для статики фронтенда"
+  type        = string
+  default     = "momo-store-frontend"
+}
+
 variable "zone" {
   description = "Зона доступности по умолчанию"
   type        = string

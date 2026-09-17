@@ -26,13 +26,40 @@ data "yandex_compute_image" "ubuntu" {
 }
 
 # ============================================================================
+# Сервисный аккаунт для GitLab Runner
+# ============================================================================
+
+resource "yandex_iam_service_account" "runner_sa" {
+  name        = "${var.environment}-gitlab-runner-sa"
+  description = "Service account for GitLab Runner in ${var.environment}"
+}
+
+# ============================================================================
+# Роли сервисного аккаунта
+# ============================================================================
+
+resource "yandex_resourcemanager_folder_iam_member" "runner_sa_roles" {
+  for_each = toset([
+    "container-registry.images.pusher",
+    "container-registry.images.puller",
+    "storage.editor",
+    "logging.writer",
+  ])
+
+  folder_id = var.folder_id
+  role      = each.value
+  member    = "serviceAccount:${yandex_iam_service_account.runner_sa.id}"
+}
+
+# ============================================================================
 # Виртуальная машина для GitLab Runner
 # ============================================================================
 
 resource "yandex_compute_instance" "runner" {
-  name        = "${var.environment}-runner"
-  hostname    = "${var.environment}-runner"
-  platform_id = "standard-v3"
+  name               = "${var.environment}-runner"
+  hostname           = "${var.environment}-runner"
+  platform_id        = "standard-v3"
+  service_account_id = yandex_iam_service_account.runner_sa.id
 
   resources {
     cores  = 2
@@ -62,6 +89,10 @@ resource "yandex_compute_instance" "runner" {
   }
 
   labels = var.tags
+
+  depends_on = [
+    yandex_resourcemanager_folder_iam_member.runner_sa_roles,
+  ]
 }
 
 # ============================================================================

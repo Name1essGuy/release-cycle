@@ -27,12 +27,3 @@ ingress:
           pathType: Prefix
           service: frontend
           port: 80
-
-ingress-nginx:
-  controller:
-    service:
-      annotations:
-        yandex.cloud/load-balancer-type: "external"
-        yandex.cloud/security-group-ids: "enpicb6am6e6ngs4eri6"
-    admissionWebhooks:
-      enabled: false

@@ -90,16 +90,3 @@ ingress:
           pathType: Prefix
           service: frontend
           port: 80
-
-# ============================================================================
-# Ingress Controller
-# ============================================================================
-
-ingress-nginx:
-  enabled: true
-  controller:
-    service:
-      annotations:
-        yandex.cloud/load-balancer-type: "external"
-    admissionWebhooks:
-      enabled: false

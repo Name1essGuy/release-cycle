@@ -109,13 +109,13 @@ cp .env.example .env
 | `BACKEND_VERSION` | Версия бэкенда | `1.0.0` | Передаётся в бинарник через `ldflags` |
 | `NODE_ENV` | Среда | `production` | `development` или `production` |
 | `FRONTEND_PORT` | Порт dev-сервера фронтенда | `8080` | Только для dev |
-| `VUE_APP_API_URL` | URL API для фронтенда | `/api` | Для prod — относительный путь |
-| `VUE_APP_VERSION` | Версия фронтенда | `1.0.0` | — |
+| `VUE_APP_API_URL` | URL API для фронтенда | `/api` | Для prod - относительный путь |
+| `VUE_APP_VERSION` | Версия фронтенда | `1.0.0` | - |
 | `S3_BUCKET` | Имя S3-бакета для статики | `momo-store-frontend` | Только для prod |
-| `S3_ENDPOINT` | Endpoint Object Storage | `https://storage.yandexcloud.net` | — |
-| `S3_PREFIX` | Папка в бакете | `momo-store` | — |
-| `AWS_ACCESS_KEY_ID` | Ключ доступа к S3 | — | Из bootstrap |
-| `AWS_SECRET_ACCESS_KEY` | Секретный ключ S3 | — | Из bootstrap |
+| `S3_ENDPOINT` | Endpoint Object Storage | `https://storage.yandexcloud.net` | - |
+| `S3_PREFIX` | Папка в бакете | `momo-store` | - |
+| `AWS_ACCESS_KEY_ID` | Ключ доступа к S3 | - | Из bootstrap |
+| `AWS_SECRET_ACCESS_KEY` | Секретный ключ S3 | - | Из bootstrap |
 
 ---
 

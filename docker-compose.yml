@@ -48,7 +48,7 @@ services:
     profiles:
       - dev
 
-  # ============ Фронтенд (PROD — загрузка в S3) ============
+  # ============ Фронтенд (PROD - загрузка в S3) ============
   frontend-uploader:
     build:
       context: ./services/frontend

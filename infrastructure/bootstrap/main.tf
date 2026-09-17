@@ -43,8 +43,8 @@ resource "yandex_iam_service_account_static_access_key" "state_sa_key" {
 # ============================================================================
 
 resource "yandex_storage_bucket" "terraform_state" {
-  bucket     = var.bucket_name
-  max_size   = 10737418240
+  bucket   = var.bucket_name
+  max_size = 10737418240
   #access_key = yandex_iam_service_account_static_access_key.state_sa_key.access_key
   #secret_key = yandex_iam_service_account_static_access_key.state_sa_key.secret_key
 

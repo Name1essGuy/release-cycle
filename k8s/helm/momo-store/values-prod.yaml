@@ -1,0 +1,53 @@
+global:
+  imagePullSecrets:
+    - name: ycr-secret
+
+backend:
+  replicaCount: 3
+  image:
+    tag: 1.1.0
+    pullPolicy: Always
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi
+
+frontend:
+  replicaCount: 1
+  s3:
+    endpoint: "storage.yandexcloud.net"
+    bucket: "momo-store-frontend"
+    prefix: "momo-store"
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+
+ingress:
+  enabled: true
+  hosts:
+    - host: ""
+      paths:
+        - path: /api
+          pathType: Prefix
+          service: backend
+          port: 8081
+        - path: /
+          pathType: Prefix
+          service: frontend
+          port: 80
+
+ingress-nginx:
+  controller:
+    service:
+      annotations:
+        yandex.cloud/load-balancer-type: "external"
+        yandex.cloud/security-group-ids: "enpicb6am6e6ngs4eri6"
+    admissionWebhooks:
+      enabled: false

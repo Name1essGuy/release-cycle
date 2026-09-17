@@ -1,0 +1,58 @@
+{{- if .Values.ingress.enabled }}
+# Ingress для API с rewrite
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "momo-store.fullname" . }}-api
+  labels:
+    {{- include "momo-store.labels" . | nindent 4 }}
+  annotations:
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    {{- if .host }}
+    - host: {{ .host | quote }}
+    {{- else }}
+    - 
+    {{- end }}
+      http:
+        paths:
+          - path: /api(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ include "momo-store.fullname" $ }}-backend
+                port:
+                  number: 8081
+    {{- end }}
+---
+# Ingress для фронта без rewrite
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "momo-store.fullname" . }}-frontend
+  labels:
+    {{- include "momo-store.labels" . | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    {{- if .host }}
+    - host: {{ .host | quote }}
+    {{- else }}
+    - 
+    {{- end }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "momo-store.fullname" $ }}-frontend
+                port:
+                  number: 80
+    {{- end }}
+{{- end }}

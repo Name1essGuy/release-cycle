@@ -108,7 +108,15 @@ resource "yandex_vpc_security_group" "control_plane" {
     v4_cidr_blocks = var.ssh_allowed_cidrs
   }
 
-  # Kubernetes API
+  # Kubernetes API (443 — для управляемого кластера Yandex Cloud)
+  ingress {
+    protocol       = "TCP"
+    description    = "Kubernetes API (HTTPS)"
+    port           = 443
+    v4_cidr_blocks = var.api_allowed_cidrs
+  }
+
+  # Kubernetes API (6443 — для доступа к API напрямую)
   ingress {
     protocol       = "TCP"
     description    = "Kubernetes API"
@@ -121,7 +129,7 @@ resource "yandex_vpc_security_group" "control_plane" {
     protocol       = "TCP"
     description    = "Etcd"
     port           = 2379
-    v4_cidr_blocks = [var.vpc_cidr] # Только внутри VPC
+    v4_cidr_blocks = [var.vpc_cidr]
   }
 
   # Kubelet API
@@ -129,19 +137,19 @@ resource "yandex_vpc_security_group" "control_plane" {
     protocol       = "TCP"
     description    = "Kubelet API"
     port           = 10250
-    v4_cidr_blocks = [var.vpc_cidr] # Только внутри VPC
+    v4_cidr_blocks = [var.vpc_cidr]
   }
 
-  # Внутреннее общение между всеми нодами кластера
+  # Внутреннее общение: VPC + pods + services
   ingress {
     protocol       = "ANY"
-    description    = "All internal traffic"
-    v4_cidr_blocks = [var.vpc_cidr]
+    description    = "All internal traffic (VPC + pods + services)"
+    v4_cidr_blocks = [var.vpc_cidr, var.pod_cidr, var.service_cidr]
     from_port      = 0
     to_port        = 65535
   }
 
-  # Исходящие правила (разрешаем весь исходящий трафик)
+  # Исходящие правила
   egress {
     protocol       = "ANY"
     description    = "All egress traffic"
@@ -163,7 +171,9 @@ resource "yandex_vpc_security_group" "workers" {
   description = "Security group for worker nodes"
   network_id  = yandex_vpc_network.this.id
 
-  # Входящие правила
+  # === Входящие правила ===
+
+  # SSH
   ingress {
     protocol       = "TCP"
     description    = "SSH access"
@@ -171,6 +181,7 @@ resource "yandex_vpc_security_group" "workers" {
     v4_cidr_blocks = var.ssh_allowed_cidrs
   }
 
+  # Kubelet API
   ingress {
     protocol       = "TCP"
     description    = "Kubelet API"
@@ -178,6 +189,39 @@ resource "yandex_vpc_security_group" "workers" {
     v4_cidr_blocks = [var.vpc_cidr]
   }
 
+  # Health checks от LoadBalancer (legacy)
+  ingress {
+    protocol          = "TCP"
+    description       = "Health checks from LoadBalancer (10501, legacy)"
+    port              = 10501
+    predefined_target = "loadbalancer_healthchecks"
+  }
+
+  # kube-proxy health check от LoadBalancer
+  ingress {
+    protocol          = "TCP"
+    description       = "kube-proxy health check from LoadBalancer (10256)"
+    port              = 10256
+    predefined_target = "loadbalancer_healthchecks"
+  }
+
+  # HTTP от LoadBalancer
+  ingress {
+    protocol       = "TCP"
+    description    = "HTTP from LoadBalancer"
+    port           = 80
+    v4_cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # HTTPS от LoadBalancer
+  ingress {
+    protocol       = "TCP"
+    description    = "HTTPS from LoadBalancer"
+    port           = 443
+    v4_cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # NodePort services
   ingress {
     protocol       = "TCP"
     description    = "NodePort services"
@@ -186,14 +230,16 @@ resource "yandex_vpc_security_group" "workers" {
     v4_cidr_blocks = ["0.0.0.0/0"]
   }
 
+  # Внутреннее общение: VPC + pods + services
   ingress {
     protocol       = "ANY"
-    description    = "All internal traffic"
-    v4_cidr_blocks = [var.vpc_cidr]
+    description    = "All internal traffic (VPC + pods + services)"
+    v4_cidr_blocks = [var.vpc_cidr, var.pod_cidr, var.service_cidr]
     from_port      = 0
     to_port        = 65535
   }
 
+  # Исходящие правила
   egress {
     protocol       = "ANY"
     description    = "All egress traffic"
@@ -231,8 +277,8 @@ resource "yandex_vpc_security_group" "gitlab_runner" {
 
   ingress {
     protocol       = "ANY"
-    description    = "All internal traffic"
-    v4_cidr_blocks = [var.vpc_cidr]
+    description    = "All internal traffic (VPC + pods + services)"
+    v4_cidr_blocks = [var.vpc_cidr, var.pod_cidr, var.service_cidr]
     from_port      = 0
     to_port        = 65535
   }
@@ -252,12 +298,10 @@ resource "yandex_vpc_security_group" "gitlab_runner" {
   }
 }
 
-# 4.4. Security Group для балансировщика нагрузки (опционально)
-resource "yandex_vpc_security_group" "load_balancer" {
-  count = var.environment == "prod" ? 1 : 0 # Только для production
-
-  name        = "${var.environment}-sg-load-balancer"
-  description = "Security group for load balancer"
+# 4.4. Security Group для балансировщика нагрузки
+resource "yandex_vpc_security_group" "ingress_lb" {
+  name        = "${var.environment}-sg-ingress-lb"
+  description = "Security group for Ingress LoadBalancer"
   network_id  = yandex_vpc_network.this.id
 
   ingress {
@@ -274,6 +318,13 @@ resource "yandex_vpc_security_group" "load_balancer" {
     v4_cidr_blocks = ["0.0.0.0/0"]
   }
 
+  ingress {
+    protocol          = "TCP"
+    description       = "Health checks"
+    port              = 10501
+    predefined_target = "loadbalancer_healthchecks"
+  }
+
   egress {
     protocol       = "ANY"
     description    = "All egress traffic"
@@ -284,7 +335,7 @@ resource "yandex_vpc_security_group" "load_balancer" {
 
   labels = {
     environment = var.environment
-    role        = "load-balancer"
+    role        = "ingress-lb"
     managed_by  = "terraform"
   }
 }

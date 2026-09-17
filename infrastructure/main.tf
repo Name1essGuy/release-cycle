@@ -1,8 +1,5 @@
 # infrastructure/main.tf
 
-terraform {
-  required_version = ">= 1.5.0"
-}
 
 # ============================================================================
 # Определение текущего окружения через workspace
@@ -26,45 +23,39 @@ module "networking" {
   enable_nat   = true
 
   ssh_allowed_cidrs = var.ssh_allowed_cidrs[local.environment]
-  api_allowed_cidrs = ["0.0.0.0/0"] # Для учебного проекта
+  api_allowed_cidrs = ["0.0.0.0/0"]
+
+  # Диапазоны кластера, чтобы SG workers/control-plane пропускали
+  # pod-to-pod и pod-to-service трафик автоматически.
+  pod_cidr     = var.pod_cidr
+  service_cidr = var.service_cidr
 
   tags = var.tags
 }
 
 # ============================================================================
-# Модуль: Kubernetes Cluster
+# Модуль: Kubernetes Cluster (управляемый)
 # ============================================================================
 
 module "kubernetes_cluster" {
   source = "./modules/kubernetes-cluster"
 
-  environment  = local.environment
-  worker_count = var.worker_count[local.environment]
+  folder_id   = var.folder_id
+  environment = local.environment
+  network_id  = module.networking.vpc_id
+  subnet_id   = module.networking.subnet_ids[0]
+  zone        = var.zones[local.environment][0]
 
-  control_plane_instance_type = var.control_plane_instance_type[local.environment]
-  worker_instance_type        = var.worker_instance_type[local.environment]
+  k8s_version      = var.kubernetes_version
+  worker_count     = var.worker_count[local.environment]
+  worker_cores     = 2
+  worker_memory    = 4
+  worker_disk_size = 30
 
-  subnet_ids                      = module.networking.subnet_ids
-  zones                           = module.networking.subnet_zones
-  control_plane_security_group_id = module.networking.control_plane_security_group_id
-  workers_security_group_id       = module.networking.workers_security_group_id
-
-  ssh_public_key = file(var.ssh_public_key_path)
-
-  pod_network_cidr   = var.pod_network_cidr
-  kubernetes_version = var.kubernetes_version
-  cluster_name       = "${local.environment}-cluster"
+  cluster_security_group_id = module.networking.control_plane_security_group_id
+  worker_security_group_id  = module.networking.workers_security_group_id
 
   tags = var.tags
-}
-
-# ============================================================================
-# Чтение join-команды из локального файла (создаётся модулем kubernetes-cluster)
-# ============================================================================
-
-data "local_file" "join_command" {
-  depends_on = [module.kubernetes_cluster]
-  filename   = "./join-command.txt"
 }
 
 # ============================================================================
@@ -89,12 +80,10 @@ module "gitlab_runner" {
 # Зависимости для правильного порядка создания
 # ============================================================================
 
-# Убеждаемся, что сеть создана до кластера
 resource "null_resource" "depends_on_networking" {
   depends_on = [module.networking]
 }
 
-# Убеждаемся, что кластер создан до раннера
 resource "null_resource" "depends_on_cluster" {
   depends_on = [module.kubernetes_cluster]
 }

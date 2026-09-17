@@ -6,6 +6,14 @@ terraform {
       source  = "yandex-cloud/yandex"
       version = "~> 0.100.0"
     }
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.2.0"
+    }
+    external = {
+      source  = "hashicorp/external"
+      version = "~> 2.3.0"
+    }
   }
 }
 

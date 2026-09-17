@@ -2,118 +2,117 @@
 
 ## 📋 Описание
 
-Этот проект управляет инфраструктурой для Kubernetes кластера в Yandex Cloud с использованием **Terraform**. Вся инфраструктура описана как код и разделена на окружения: `dev`, `staging`, `prod`.
+Проект управляет инфраструктурой для Kubernetes-кластера в Yandex Cloud с использованием **Terraform**. Вся инфраструктура описана как код и разделена по окружениям через **Terraform Workspaces**: `staging`, `prod`.
+
+Модуль `networking` создаёт VPC, подсети, NAT, security groups. Модуль `kubernetes-cluster` разворачивает managed Kubernetes. Модуль `gitlab-runner` — опционально — разворачивает ВМ с GitLab Runner.
 
 ---
 
-## 🏗️ Архитектура
+## 🏗 Архитектура
 
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ Yandex Cloud                                                                 │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────────┐  │
+│  │ VPC (staging: 10.1.0.0/16, prod: 10.2.0.0/16)                          │  │
+│  │                                                                        │  │
+│  │   ┌───────────────┐    ┌───────────────┐    ┌───────────────┐          │  │
+│  │   │  Subnet 1     │    │  Subnet 2     │    │  Subnet 3*    │          │  │
+│  │   │ ru-central1-a │    │ ru-central1-b │    │ ru-central1-c │          │  │
+│  │   └───────┬───────┘    └───────┬───────┘    └───────┬───────┘          │  │
+│  │           │                    │                    │                  │  │
+│  │   ┌───────▼────────────────────▼────────────────────▼───────┐          │  │
+│  │   │ Security Groups                                         │          │  │
+│  │   │  • <env>-sg-control-plane                               │          │  │
+│  │   │  • <env>-sg-workers                                     │          │  │
+│  │   │  • <env>-sg-gitlab-runner                               │          │  │
+│  │   │  • <env>-sg-ingress-lb                                  │          │  │
+│  │   └───────────────────────┬─────────────────────────────────┘          │  │
+│  │                           │                                            │  │
+│  │   ┌───────────────────────▼─────────────────────────────────┐          │  │
+│  │   │ Managed Kubernetes (Yandex Cloud)                       │          │  │
+│  │   │                                                         │          │  │
+│  │   │  ┌────────────────────────────────────────┐             │          │  │
+│  │   │  │ Control plane (managed by YC)          │             │          │  │
+│  │   │  │  • kube-apiserver, etcd, scheduler     │             │          │  │
+│  │   │  │  • controller-manager                  │             │          │  │
+│  │   │  └────────────────────────────────────────┘             │          │  │
+│  │   │                                                         │          │  │
+│  │   │  ┌───────────────┐  ┌───────────────┐  ┌────────────┐   │          │  │
+│  │   │  │ Worker 1      │  │ Worker 2      │  │ Worker N*  │   │          │  │
+│  │   │  │ containerd    │  │ containerd    │  │ containerd │   │          │  │
+│  │   │  │ kubelet,      │  │ kubelet,      │  │ kubelet,   │   │          │  │
+│  │   │  │ kube-proxy    │  │ kube-proxy    │  │ kube-proxy │   │          │  │
+│  │   │  └───────────────┘  └───────────────┘  └────────────┘   │          │  │
+│  │   └─────────────────────────────────────────────────────────┘          │  │
+│  │                                                                        │  │
+│  │   ┌─────────────────────────────────────────────────────────┐          │  │
+│  │   │ GitLab Runner (только staging/prod)                     │          │  │
+│  │   │  • Docker executor                                      │          │  │
+│  │   │  • kubectl, helm, yc                                    │          │  │
+│  │   └─────────────────────────────────────────────────────────┘          │  │
+│  └────────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────────┐  │
+│  │ S3 Bucket (Terraform state)                                            │  │
+│  │   • infrastructure/staging/terraform.tfstate                           │  │
+│  │   • infrastructure/prod/terraform.tfstate                              │  │
+│  └────────────────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────────────┘
 
-```markdown
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ Yandex Cloud                                                                │
-│ ┌───────────────────────────────────────────────────────────────────────┐   │
-│ │ VPC (Virtual Private Cloud)                                           │   │
-│ │ ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                  │   │
-│ │ │   Subnet A   │  │  Subnet B    │  │ Subnet C     │                  │   │
-│ │ │ ru-central1-a│  │ ru-central1-b│  │ ru-central1-c│                  │   │
-│ │ └──────┬───────┘  └──────┬───────┘  └──────┬───────┘                  │   │
-│ │        │                 │                 │                          │   │
-│ │ ┌──────▼─────────────────▼─────────────────▼──────┐                   │   │
-│ │ │                  Security Groups                │                   │   │
-│ │ │   • Control Plane • Workers • GitLab Runner     │                   │   │
-│ │ └──────────────────────┬──────────────────────────┘                   │   │
-│ │                        │                                              │   │
-│ │ ┌──────────────────────▼───────────────────────────┐                  │   │
-│ │ │ Kubernetes Cluster                               │                  │   │
-│ │ │ ┌────────────────────────────────────────────┐   │                  │   │
-│ │ │ │          Control Plane (master)            │   │                  │   │
-│ │ │ │ • kube-apiserver                           │   │                  │   │
-│ │ │ │ • etcd                                     │   │                  │   │
-│ │ │ │ • kube-scheduler                           │   │                  │   │
-│ │ │ │ • kube-controller-manager                  │   │                  │   │
-│ │ │ └────────────────────────────────────────────┘   │                  │   │
-│ │ │ ┌──────────────┐ ┌──────────────┐                │                  │   │
-│ │ │ │ Worker 1     │ │ Worker 2     │ ...            │                  │   │
-│ │ │ │ • containerd │ │ • containerd │                │                  │   │
-│ │ │ │ • kubelet │ │ • kubelet │ │ │ │                │                  │   │
-│ │ │ │ • kube-proxy│ │ • kube-proxy│ │                │                  │   │
-│ │ │ └──────────────┘ └──────────────┘                │                  │   │
-│ │ └──────────────────────────────────────────────────┘                  │   │
-│ │                                                                       │   │
-│ │ ┌──────────────────────────────────────────────────┐                  │   │
-│ │ │           GitLab Runner (staging/prod)           │                  │   │
-│ │ │ • Docker executor                                │                  │   │
-│ │ │ • kubectl, helm, yc CLI                          │                  │   │
-│ │ └──────────────────────────────────────────────────┘                  │   │
-│ └───────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-│ ┌───────────────────────────────────────────────────────────────────────┐   │
-│ │                     S3 Bucket (Terraform State)                       │   │
-│ │ • /infrastructure/dev/terraform.tfstate                               │   │
-│ │ • /infrastructure/staging/terraform.tfstate                           │   │
-│ │ • /infrastructure/prod/terraform.tfstate                              │   │
-│ └───────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────┘
+* Subnet 3 и Worker N появляются только в prod (3 подсети и 3 воркера).
 ```
 
 ---
 
 ## 📁 Структура проекта
 
-```markdown
+```
 infrastructure/
 │
-├── bootstrap/ # Создание S3-бакета (запускается 1 раз)
+├── bootstrap/                       # Создаётся 1 раз вручную
 │   ├── main.tf
 │   ├── variables.tf
 │   ├── outputs.tf
+│   ├── provider.tf
 │   └── terraform.tfvars.example
-│   
 │
-├── environments/ # Настройки для окружений
-│   ├── dev/
-│   │   └── terraform.tfvars.example
+├── environments/                    # tfvars для каждого окружения
 │   ├── staging/
+│   │   ├── terraform.tfvars
 │   │   └── terraform.tfvars.example
 │   └── prod/
+│       ├── terraform.tfvars
 │       └── terraform.tfvars.example
 │
-├── modules/ # Переиспользуемые модули
-│   ├── networking/ # VPC, подсети, security groups
+├── modules/
+│   ├── networking/                  # VPC, подсети, NAT, SG
 │   │   ├── main.tf
 │   │   ├── variables.tf
 │   │   └── outputs.tf
-│   │  
-│   ├── kubernetes-cluster/ # Kubernetes кластер
+│   │
+│   ├── kubernetes-cluster/          # Managed K8s
 │   │   ├── main.tf
 │   │   ├── variables.tf
-│   │   ├── outputs.tf
-│   │   └── scripts/
-│   │       ├── control-plane-setup.sh
-│   │       └── worker-setup.sh
-│   │   
-│   └── gitlab-runner/ # GitLab Runner
+│   │   └── outputs.tf
+│   │
+│   └── gitlab-runner/               # GitLab Runner
 │       ├── main.tf
 │       ├── variables.tf
 │       ├── outputs.tf
 │       └── scripts/
 │           └── install-runner.sh
-│       
 │
-├── scripts/ # Вспомогательные скрипты
-│   ├── apply.sh # Применение для окружения
-│   ├── destroy.sh # Удаление окружения
-│   ├── get-kubeconfig.sh # Получение kubeconfig
-│   └── setup-env.sh.example # Шаблон переменных окружения
+├── scripts/
+│   └── apply.sh                     # Применение для окружения
 │
 ├── .gitignore
-├── .terraform-version
-├── backend.tf # S3 бэкенд для хранения состояния
-├── provider.tf # Конфигурация провайдера Yandex Cloud
-├── variables.tf # Глобальные переменные
-├── main.tf # Точка входа (вызов модулей)
-└── outputs.tf # Глобальные выходы 
+├── backend.tf                       # S3 backend для state
+├── provider.tf                      # Провайдер Yandex Cloud
+├── variables.tf                     # Глобальные переменные
+├── main.tf                          # Вызов модулей
+└── outputs.tf                       # Глобальные outputs
 ```
 
 ---
@@ -121,41 +120,43 @@ infrastructure/
 ## 🔧 Предварительные требования
 
 ### 1. Установленное ПО
+
 | Инструмент | Версия | Назначение |
-| :--- | :--- | :--- |
-| **Terraform** | >= 1.5.0 | Управление инфраструктурой |
-| **Yandex Cloud CLI** | последняя | Взаимодействие с Yandex Cloud |
-| **kubectl** | >= 1.28 | Управление Kubernetes |
-| **Git** | последняя | Контроль версий |
+|---|---|---|
+| Terraform | ≥ 1.5.0 | Управление инфраструктурой |
+| Yandex Cloud CLI | последняя | Взаимодействие с YC |
+| kubectl | ≥ 1.28 | Управление Kubernetes |
+| Git | последняя | Контроль версий |
 
 ### 2. Доступы в Yandex Cloud
-- Аккаунт в Yandex Cloud
-- Права на создание ресурсов (VPC, Compute, Object Storage)
-- Сервисный аккаунт с ролью `storage.admin` (для bootstrap)
-- Сервисный аккаунт с ролью `editor` (для основной инфраструктуры)
 
-### 3. Настройка переменных окружения
+- Аккаунт в Yandex Cloud.
+- Права на создание VPC, Compute, Object Storage.
+- Сервисный аккаунт с ролями `editor` + `storage.editor` (создаётся в `bootstrap`).
+
+### 3. Переменные окружения
 
 ```bash
-# Для сервисного аккаунта (основной проект)
+# Для основного проекта
 export YC_SERVICE_ACCOUNT_KEY_FILE="/путь/к/key.json"
-export YC_CLOUD_ID="<your-cloud-id>"
-export YC_FOLDER_ID="<your-folder-id>"
+export YC_CLOUD_ID="<cloud-id>"
+export YC_FOLDER_ID="<folder-id>"
 
-# Для S3 бэкенда (из bootstrap)
-export AWS_ACCESS_KEY_ID="<access-key-from-bootstrap>"
-export AWS_SECRET_ACCESS_KEY="<secret-key-from-bootstrap>"
+# Для S3-бэкенда (значения из bootstrap)
+export AWS_ACCESS_KEY_ID="<access-key>"
+export AWS_SECRET_ACCESS_KEY="<secret-key>"
 
-# Для GitLab Runner (для staging/prod)
-export TF_VAR_gitlab_token='{"staging": "glrt-xxxxxxxxxxxx", "prod: "glrt-xxxxxxxxxxxx"}'
+# Для GitLab Runner (staging, prod)
+export TF_VAR_gitlab_token='{"staging": "glrt-xxxx", "prod": "glrt-xxxx"}'
 ```
 
 ---
 
 ## 🚀 Быстрый старт
-### Шаг 1: Bootstrap (запускается 1 раз)
 
-Создает S3-бакет для хранения Terraform state:
+### Шаг 1. Bootstrap (один раз)
+
+Создаёт сервисный аккаунт, S3-бакет для Terraform state, Container Registry и ключи доступа:
 
 ```bash
 cd bootstrap
@@ -163,44 +164,51 @@ cp terraform.tfvars.example terraform.tfvars
 # Отредактируйте terraform.tfvars
 terraform init
 terraform apply
-# Сохраните access_key и secret_key
 ```
 
-📖 Подробнее: [docs/devops/infrastructure/bootstrap.md](./bootstrap.md)
+Сохраните `access_key`, `secret_key`, `docker_access_key`, `docker_secret_key`, `registry_url`.
 
-### Шаг 2: Настройка основного проекта
+📖 Подробнее: [bootstrap.md](./bootstrap.md)
+
+### Шаг 2. Настройка окружения
 
 ```bash
 cd infrastructure
-
-# Создайте terraform.tfvars для нужного окружения
-cp environments/dev/terraform.tfvars.example environments/dev/terraform.tfvars
-# Отредактируйте файл с параметрами окружения
+cp environments/staging/terraform.tfvars.example environments/staging/terraform.tfvars
+# Отредактируйте terraform.tfvars
 ```
 
-### Шаг 3: Развёртывание инфраструктуры
+### Шаг 3. Деплой инфраструктуры
 
 ```bash
-# Для dev окружения
-./scripts/apply.sh dev
-
-# Для staging окружения
+# Staging
 ./scripts/apply.sh staging
 
-# Для prod окружения
+# Prod
 ./scripts/apply.sh prod
 ```
 
-### Шаг 4: Получение доступа к кластеру
+Скрипт `apply.sh`:
+1. Выбирает/создаёт Terraform workspace.
+2. Запускает `terraform init`.
+3. Проверяет формат и синтаксис.
+4. Запускает `terraform plan` и `terraform apply`.
+
+### Шаг 4. Доступ к кластеру
 
 ```bash
-# Получить kubeconfig для dev
-./scripts/get-kubeconfig.sh dev
+# Получить kubeconfig
+yc managed-kubernetes cluster get-credentials \
+  --name staging-managed-k8s \
+  --external --force
 
-# Использовать kubectl
-export KUBECONFIG=./kubeconfig-dev
 kubectl get nodes
-kubectl get pods -A
+```
+
+Имя кластера — `<env>-managed-k8s`. Узнать точно:
+
+```bash
+terraform output -raw cluster_name
 ```
 
 ---
@@ -209,91 +217,117 @@ kubectl get pods -A
 
 ### Workspaces
 
-Проект использует **Terraform Workspaces** для разделения окружений:
+Проект использует **Terraform Workspaces**:
 
-| Workspace | Окружение       | Назначение                          |
-|-----------|-----------------|-------------------------------------|
-| dev       | Development     | Разработка и тестирование           |
-| staging   | Staging         | Предпродакшен тестирование          |
-| prod      | Production      | Боевое окружение                    |
+| Workspace | Назначение |
+|---|---|
+| `staging` | Pre-production |
+| `prod` | Production |
 
-#### Переключение между окружениями:
+Работа с workspace:
 
 ```bash
-# Просмотр текущего workspace
 terraform workspace show
-
-# Переключение
-terraform workspace select dev
-
-# Создание нового workspace
-terraform workspace new staging
+terraform workspace select staging
+terraform workspace new prod
 ```
 
 ### Параметры окружений
 
-| Параметр         | dev              | staging          | prod             |
-|------------------|------------------|------------------|------------------|
-| Worker count     | 1                | 2                | 3                |
-| Control Plane    | s2.micro         | s2.medium        | s2.large         |
-| Worker           | s2.micro         | s2.medium        | s2.large         |
-| GitLab Runner    | ❌ Нет           | ✅ Да            | ✅ Да            |
-| VPC CIDR         | 10.0.0.0/16      | 10.1.0.0/16      | 10.2.0.0/16      |
-| Subnets          | 2                | 2                | 3                |
+Задаются в `variables.tf` (значения по умолчанию) и переопределяются в `environments/<env>/terraform.tfvars`:
 
-## 🔧 Команды для работы
+| Параметр | staging | prod |
+|---|---|---|
+| `worker_count` | 2 | 3 |
+| `vpc_cidr` | `10.1.0.0/16` | `10.2.0.0/16` |
+| `subnet_cidrs` | 2 подсети | 3 подсети |
+| `zones` | a, b | a, b, c |
+| GitLab Runner | ✅ | ✅ |
+| `pod_cidr` | `10.112.0.0/16` | `10.112.0.0/16` |
+| `service_cidr` | `10.96.0.0/16` | `10.96.0.0/16` |
 
-### Основные команды
+> **Важно:** `pod_cidr` и `service_cidr` **должны совпадать** с реальными диапазонами кластера Yandex Cloud. Если они разойдутся — SG не пропустит pod-to-pod и pod-to-service трафик, что выльется в проблемы с DNS, CoreDNS и egress.
 
-| Команда                              | Описание                              |
-|--------------------------------------|---------------------------------------|
-| `./scripts/apply.sh dev`             | Развернуть/обновить dev окружение     |
-| `./scripts/destroy.sh dev`           | Удалить dev окружение                 |
-| `./scripts/get-kubeconfig.sh dev`    | Получить kubeconfig для dev           |
-| `terraform plan`                     | Просмотр планируемых изменений        |
-| `terraform apply`                    | Применение изменений                  |
-| `terraform destroy`                  | Удаление инфраструктуры               |
-| `terraform fmt`                      | Форматирование кода                   |
-| `terraform validate`                 | Проверка синтаксиса                   |
+---
 
-### Полезные команды
+## 🔧 Команды
+
+| Команда | Описание |
+|---|---|
+| `./scripts/apply.sh staging` | Развернуть/обновить staging |
+| `./scripts/apply.sh prod` | Развернуть/обновить prod |
+| `terraform plan` | Просмотр планируемых изменений |
+| `terraform apply` | Применение изменений |
+| `terraform destroy` | Удаление инфраструктуры |
+| `terraform fmt -recursive` | Форматирование кода |
+| `terraform validate` | Проверка синтаксиса |
+| `terraform output` | Все выходные значения |
+| `terraform output -raw <name>` | Одно значение |
+| `terraform state list` | Список ресурсов в state |
+
+---
+
+## 📤 Полезные outputs
 
 ```bash
-# Просмотр всех ресурсов
-terraform state list
+# ID кластера
+terraform output -raw cluster_id
 
-# Просмотр конкретного ресурса
-terraform state show module.kubernetes_cluster.yandex_compute_instance.control_plane[0]
+# Endpoint Kubernetes API
+terraform output -raw cluster_endpoint
 
-# Получить выходные данные
-terraform output
+# Команда для получения kubeconfig
+terraform output -raw get_kubeconfig_command
 
-# Получить конкретный выход
-terraform output -raw control_plane_nat_ip
+# ID Security Group для Ingress LB (нужен для Helm-чарта)
+terraform output -raw ingress_lb_security_group_id
+
+# IP GitLab Runner (только staging/prod)
+terraform output -raw gitlab_runner_ip
 ```
+
+`ingress_lb_security_group_id` особенно важен — его надо подставить в Helm-чарт `momo-store`:
+
+```yaml
+ingress-nginx:
+  controller:
+    service:
+      annotations:
+        yandex.cloud/security-group-ids: "<ingress_lb_security_group_id>"
+```
+
+---
 
 ## 🔒 Безопасность
 
 ### Секреты
-- Никогда не коммитьте .tfvars файлы и key.json
-- Используйте переменные окружения для секретов
-- Для CI/CD используйте защищённые переменные GitLab
+
+- Не коммитить: `terraform.tfvars`, `key.json`, `keys.json`, `outputs.json`, `*.tfstate`, `*.tfstate.backup`.
+- Секреты — только через переменные окружения (`YC_*`, `AWS_*`, `TF_VAR_*`).
+- Для CI/CD — защищённые переменные GitLab.
 
 ### Доступы
-- Для учебного проекта SSH разрешён со всех IP (0.0.0.0/0)
-- В production ограничьте доступы конкретными IP
 
-### State файл
-- State файл хранится в S3 с шифрованием
-- Включено версионирование для защиты от случайного удаления
+- В учебном проекте `ssh_allowed_cidrs` = `0.0.0.0/0`. Для production ограничьте конкретными IP.
+- `api_allowed_cidrs` для K8s API — тоже стоит ограничить в prod.
+- `master.public_ip = true` даёт публичный endpoint API; в prod рассмотрите VPN/bastion.
+
+### Terraform state
+
+- State хранится в S3 (`nameless-terraform-state-bucket`).
+- Включено версионирование и lifecycle (удаление старых версий через 30 дней).
+- Префикс `infrastructure/<workspace>/terraform.tfstate` — каждый workspace в своём файле.
+
+---
 
 ## 📚 Ссылки и документация
 
 ### Внутренняя документация
-- [Bootstrap](./bootstrap.md) — создание S3-бакета
-- [Networking](./networking.md) — сеть и security groups
-- [Kubernetes Cluster](./kubernetes-cluster.md) — создание кластера
-- [GitLab Runner](./gitlab-runner.md) — настройка раннера
+
+- [Bootstrap](./bootstrap.md) — сервисный аккаунт, S3, Container Registry
+- [Networking](./networking.md) — VPC, подсети, NAT, security groups
+- [Kubernetes Cluster](./kubernetes-cluster.md) — managed K8s
+- [GitLab Runner](./gitlab-runner.md) — установка раннера
 
 ### Внешние ресурсы
 

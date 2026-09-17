@@ -71,7 +71,7 @@ variable "worker_count" {
 variable "kubernetes_version" {
   description = "Версия Kubernetes"
   type        = string
-  default     = "1.28.2"
+  default     = "1.32"
 }
 
 variable "pod_network_cidr" {
@@ -128,6 +128,22 @@ variable "runner_registration_tags" {
 }
 
 # ============================================================================
+# CIDR-диапазоны Kubernetes
+# ============================================================================
+
+variable "pod_cidr" {
+  description = "CIDR-диапазон для подов (cluster_ipv4_range кластера)"
+  type        = string
+  default     = "10.112.0.0/16"
+}
+
+variable "service_cidr" {
+  description = "CIDR-диапазон для сервисов (service_ipv4_range кластера)"
+  type        = string
+  default     = "10.96.0.0/16"
+}
+
+# ============================================================================
 # Общие переменные
 # ============================================================================
 
@@ -135,7 +151,13 @@ variable "tags" {
   description = "Общие теги для всех ресурсов"
   type        = map(string)
   default = {
-    Project   = "kubernetes-learning"
-    ManagedBy = "terraform"
+    project   = "kubernetes-learning"
+    managed-by = "terraform"
   }
+}
+
+variable "folder_id" {
+  description = "ID каталога в Yandex Cloud"
+  type        = string
+  default     = ""
 }

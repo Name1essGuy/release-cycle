@@ -10,6 +10,10 @@ terraform {
       source  = "hashicorp/null"
       version = "~> 3.2.0"
     }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.9.0"
+    }
   }
 }
 
@@ -61,25 +65,44 @@ resource "yandex_compute_instance" "runner" {
 }
 
 # ============================================================================
+# Принудительная задержка перед проверкой
+# ============================================================================
+
+resource "time_sleep" "wait_for_runner" {
+  depends_on      = [yandex_compute_instance.runner]
+  create_duration = "90s"
+}
+
+# ============================================================================
 # Ожидание завершения user-data скрипта
 # ============================================================================
 
 resource "null_resource" "wait_for_cloud_init" {
-  depends_on = [yandex_compute_instance.runner]
+  depends_on = [time_sleep.wait_for_runner]
 
   connection {
-    type        = "ssh"
-    user        = "ubuntu"
-    agent       = true
-    host        = yandex_compute_instance.runner.network_interface.0.nat_ip_address
-    timeout     = "10m"
+    type    = "ssh"
+    user    = "ubuntu"
+    agent   = true
+    host    = yandex_compute_instance.runner.network_interface.0.nat_ip_address
+    timeout = "5m"
   }
 
   provisioner "remote-exec" {
     inline = [
-      "echo '⏳ Waiting for cloud-init to finish...'",
-      "while [ ! -f /var/lib/cloud/instance/boot-finished ]; do echo '⏳ Still waiting...'; sleep 10; done",
-      "echo '✅ Cloud-init finished'",
+      "echo '⏳ Waiting for cloud-init to finish (max 5 minutes)...'",
+      "for i in $(seq 1 30); do",
+      "  if [ -f /var/lib/cloud/instance/boot-finished ]; then",
+      "    echo '✅ Cloud-init finished'",
+      "    break",
+      "  fi",
+      "  echo \"⏳ Attempt $i/30: Still waiting...\"",
+      "  sleep 10",
+      "done",
+      "if [ ! -f /var/lib/cloud/instance/boot-finished ]; then",
+      "  echo '❌ Cloud-init did not finish within 5 minutes'",
+      "  exit 1",
+      "fi",
       "echo '📋 Checking GitLab Runner status...'",
       "sudo docker ps | grep gitlab-runner || echo '⚠️ GitLab Runner container not running'",
       "sudo docker exec gitlab-runner gitlab-runner list 2>/dev/null || echo '⚠️ GitLab Runner not registered'"

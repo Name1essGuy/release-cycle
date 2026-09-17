@@ -5,94 +5,69 @@ variable "environment" {
   type        = string
 }
 
-variable "control_plane_instance_type" {
-  description = "Тип инстанса для control-plane (CPU, RAM)"
+variable "folder_id" {
+  description = "ID каталога в Yandex Cloud"
   type        = string
-  default     = "s2.medium" # 2 vCPU, 4 GB RAM
 }
 
-variable "worker_instance_type" {
-  description = "Тип инстанса для worker нод"
+variable "network_id" {
+  description = "ID VPC-сети"
   type        = string
-  default     = "s2.medium"
+}
+
+variable "subnet_id" {
+  description = "ID подсети для кластера и узлов"
+  type        = string
+}
+
+variable "zone" {
+  description = "Зона доступности"
+  type        = string
+  default     = "ru-central1-a"
+}
+
+variable "k8s_version" {
+  description = "Версия Kubernetes"
+  type        = string
+  default     = "1.32"
 }
 
 variable "worker_count" {
-  description = "Количество worker нод"
+  description = "Количество worker-нод"
   type        = number
   default     = 1
 }
 
-variable "control_plane_disk_size" {
-  description = "Размер диска control-plane в ГБ"
+variable "worker_cores" {
+  description = "Количество CPU на worker-ноде"
   type        = number
-  default     = 30
+  default     = 2
+}
+
+variable "worker_memory" {
+  description = "Объём RAM на worker-ноде (ГБ)"
+  type        = number
+  default     = 4
 }
 
 variable "worker_disk_size" {
-  description = "Размер диска worker нод в ГБ"
+  description = "Размер диска worker-ноды (ГБ)"
   type        = number
   default     = 30
 }
 
-variable "subnet_ids" {
-  description = "Список ID подсетей для размещения нод"
-  type        = list(string)
-}
-
-variable "control_plane_security_group_id" {
-  description = "ID security группы для control-plane"
+variable "cluster_security_group_id" {
+  description = "ID security group для кластера"
   type        = string
 }
 
-variable "workers_security_group_id" {
-  description = "ID security группы для worker нод"
+variable "worker_security_group_id" {
+  description = "ID security group для worker-нод"
   type        = string
-}
-
-variable "ssh_public_key" {
-  description = "Публичный SSH ключ для доступа к VM"
-  type        = string
-}
-
-variable "ssh_private_key_path" {
-  description = "Путь к приватному SSH-ключу для подключения к control-plane (должен быть без пароля)"
-  type        = string
-  default     = "~/.ssh/id_rsa_terraform"
-}
-
-variable "pod_network_cidr" {
-  description = "CIDR блок для сети подов"
-  type        = string
-  default     = "10.244.0.0/16" # Flannel default
-}
-
-variable "service_network_cidr" {
-  description = "CIDR блок для сервисов"
-  type        = string
-  default     = "10.96.0.0/12"
-}
-
-variable "kubernetes_version" {
-  description = "Версия Kubernetes"
-  type        = string
-  default     = "1.28.2"
-}
-
-variable "zones" {
-  description = "Список зон доступности для распределения нод"
-  type        = list(string)
-  default     = ["ru-central1-a", "ru-central1-b"]
 }
 
 variable "tags" {
   description = "Дополнительные теги"
   type        = map(string)
   default     = {}
-}
-
-variable "cluster_name" {
-  description = "Имя кластера"
-  type        = string
-  default     = "k8s-cluster"
 }

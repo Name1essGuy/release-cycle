@@ -3,7 +3,16 @@
 ## 📋 Описание
 Этот документ описывает процесс первичной настройки инфраструктуры для хранения Terraform state-файлов в Yandex Object Storage и создания Container Registry для Docker-образов.
 
-**Важно:** Этот процесс выполняется **ОДИН РАЗ** для всего проекта.
+Bootstrap-модуль создаёт **первичную инфраструктуру** для проекта Momo Store в Yandex Cloud:
+
+- сервисный аккаунт с правами на Object Storage и Container Registry;
+- S3-бакет для хранения **Terraform state**;
+- Container Registry для Docker-образов;
+- статические и авторизованные ключи доступа.
+
+**Важно:** bootstrap выполняется **один раз** для всего проекта. Все дальнейшие окружения (`dev`, `staging`, `prod`) используют созданные здесь ресурсы.
+
+---
 
 ## 🎯 Что будет создано
 - S3-бакет в Yandex Object Storage
@@ -24,15 +33,16 @@
 - OAuth-токен
 - Cloud ID и Folder ID (можно получить через `yc config list`)
 
-### 3. Права
-- Роль `editor` или `admin` в Yandex Cloud
+- Аккаунт в Yandex Cloud.
+- Роль `editor` или `admin` в каталоге.
+- OAuth-токен (`yc init`).
 
-## 🚀 Пошаговая инструкция
+### 3. Переменные окружения
 
-### Шаг 1: Клонируйте репозиторий
 ```bash
-git clone <your-repo-url>
-cd momo-store/infrastructure/bootstrap
+export YC_TOKEN="<oauth-token>"
+export YC_CLOUD_ID="<cloud-id>"
+export YC_FOLDER_ID="<folder-id>"
 ```
 
 ### Шаг 2: Настройте переменные окружения
@@ -40,7 +50,7 @@ cd momo-store/infrastructure/bootstrap
 Создайте файл terraform.tfvars на основе шаблона:
 
 ```bash
-cp terraform.tfvars.example terraform.tfvars
+yc config list
 ```
 
 Отредактируйте terraform.tfvars:
@@ -54,41 +64,74 @@ service_account_name  = "terraform-sa"
 zone                  = "ru-central1-a"
 ```
 
-### Шаг 3: Установите переменные окружения для Yandex Cloud
+| Переменная | Тип | По умолчанию | Описание |
+|---|---|---|---|
+| `cloud_id` | string | — | ID облака |
+| `folder_id` | string | — | ID каталога |
+| `bucket_name` | string | `my-terraform-state-bucket` | Имя S3-бакета для state |
+| `registry_name` | string | `momo-store-registry` | Имя Container Registry |
+| `service_account_name` | string | `terraform-sa` | Имя сервисного аккаунта |
+| `zone` | string | `ru-central1-a` | Зона доступности |
+
+---
+
+## 🚀 Пошаговая инструкция
+
+### Шаг 1. Перейти в каталог bootstrap
 
 ```bash
-# Для Linux/macOS
-export YC_TOKEN="<your-oauth-token>"
-export YC_CLOUD_ID="<your-cloud-id>"
-export YC_FOLDER_ID="<your-folder-id>"
+cd infrastructure/bootstrap
+```
 
-# Для Windows (PowerShell)
-$env:YC_TOKEN = "<your-oauth-token>"
-$env:YC_CLOUD_ID = "<your-cloud-id>"
-$env:YC_FOLDER_ID = "<your-folder-id>"
+### Шаг 2. Создать `terraform.tfvars`
+
+```bash
+cp terraform.tfvars.example terraform.tfvars
+```
+
+Отредактировать под свой проект:
+
+```hcl
+cloud_id             = "b1gxxxxxxxxxxxxxxxxxxx"
+folder_id            = "b1gxxxxxxxxxxxxxxxxxxx"
+bucket_name          = "momo-store-terraform-state"
+registry_name        = "momo-store-registry"
+service_account_name = "terraform-sa"
+zone                 = "ru-central1-a"
 ```
 
 
 ### Шаг 4: Инициализируйте и примените Terraform
 
 ```bash
-# Инициализация (загружает провайдеры)
 terraform init
+```
 
-# Проверка плана (что будет создано)
+### Шаг 4. Посмотреть план
+
+```bash
 terraform plan
+```
 
-# Создание ресурсов
+Убедиться, что создаются только ожидаемые ресурсы.
+
+### Шаг 5. Применить
+
+```bash
 terraform apply
-
-# Подтвердите действие, введя "yes"
 ```
 
 ### Шаг 5: Получите выходные данные
 
 ```bash
-# Вывод всех выходных данных
 terraform output
+```
+
+Сохранить sensitive-значения в надёжное место (не в Git):
+
+```bash
+terraform output -json > outputs.json
+```
 
 # Сохраните в файл
 terraform output -json > outputs.json
@@ -134,11 +177,24 @@ docker login -u json_key --password-stdin cr.yandex <<< "$DOCKER_SECRET_KEY"
 ## 🧹 Очистка
 
 ```bash
-# Удаление всех созданных ресурсов
 terraform destroy
 ```
 
-## ❗️ Важные замечания
+**Внимание:** удалит сервисный аккаунт, бакет с Terraform state, Container Registry **и все образы в нём**.  
+Если state-бакет используется другими окружениями — **не запускать destroy**, пока они не удалены.
+
+---
+
+## ❗ Важные замечания
+
+- **Запускается один раз** для всего проекта.
+- **Не коммитить:** `terraform.tfvars`, `key.json`, `keys.json`, `outputs.json`, `terraform.tfstate`, `terraform.tfstate.backup`. Добавьте их в `.gitignore`.
+- **Имя бакета** должно быть глобально уникальным в Yandex Cloud.
+- **Ключи sensitive** — обращаться как с паролями. Не логировать, не выводить в CI в открытом виде.
+- **Terraform state** bootstrap-модуля хранится **локально** (в папке `bootstrap/`). Это единственный state без S3-бэкенда — потому что бакет для state как раз и создаётся здесь.
+- **Container Registry** используется и для Docker-образов, и (при необходимости) для Helm-чартов.
+
+---
 
 - Запустите этот процесс только один раз для всего проекта
 - Не коммитьте terraform.tfvars, key.json и outputs.json в Git

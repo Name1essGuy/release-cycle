@@ -1,0 +1,105 @@
+# ============================================================================
+# Global
+# ============================================================================
+
+global:
+  imagePullSecrets:
+    - name: ycr-secret
+
+# ============================================================================
+# Backend
+# ============================================================================
+
+backend:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: cr.yandex/crpcti5ji1nf9q4ofu6j/momo-store-backend
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8081
+    targetPort: 8081
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+  env:
+    - name: NODE_ENV
+      value: "production"
+  probes:
+    liveness:
+      path: /health
+      port: 8081
+      initialDelaySeconds: 10
+      periodSeconds: 10
+    readiness:
+      path: /health
+      port: 8081
+      initialDelaySeconds: 5
+      periodSeconds: 5
+
+# ============================================================================
+# Frontend (Nginx проксирует статику из S3)
+# ============================================================================
+
+frontend:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: nginx
+    tag: 1.27-alpine
+    pullPolicy: IfNotPresent
+  s3:
+    endpoint: "storage.yandexcloud.net"
+    bucket: "momo-store-frontend"
+    prefix: "momo-store"
+  dnsResolver: "10.96.128.2"
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 80
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+# ============================================================================
+# Ingress
+# ============================================================================
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: ""
+      paths:
+        - path: /api
+          pathType: Prefix
+          service: backend
+          port: 8081
+        - path: /
+          pathType: Prefix
+          service: frontend
+          port: 80
+
+# ============================================================================
+# Ingress Controller
+# ============================================================================
+
+ingress-nginx:
+  enabled: true
+  controller:
+    service:
+      annotations:
+        yandex.cloud/load-balancer-type: "external"
+    admissionWebhooks:
+      enabled: false

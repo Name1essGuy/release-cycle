@@ -1,5 +1,3 @@
-# modules/networking/outputs.tf
-
 output "vpc_id" {
   description = "ID созданной VPC"
   value       = yandex_vpc_network.this.id
@@ -40,9 +38,9 @@ output "gitlab_runner_security_group_id" {
   value       = yandex_vpc_security_group.gitlab_runner.id
 }
 
-output "load_balancer_security_group_id" {
-  description = "ID security group для балансировщика нагрузки"
-  value       = var.environment == "prod" ? yandex_vpc_security_group.load_balancer[0].id : null
+output "ingress_lb_security_group_id" {
+  description = "ID security group для Ingress LoadBalancer"
+  value       = yandex_vpc_security_group.ingress_lb.id
 }
 
 output "nat_gateway_id" {

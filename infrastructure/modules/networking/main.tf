@@ -108,7 +108,7 @@ resource "yandex_vpc_security_group" "control_plane" {
     v4_cidr_blocks = var.ssh_allowed_cidrs
   }
 
-  # Kubernetes API (443 — для управляемого кластера Yandex Cloud)
+  # Kubernetes API (443 - для управляемого кластера Yandex Cloud)
   ingress {
     protocol       = "TCP"
     description    = "Kubernetes API (HTTPS)"
@@ -116,7 +116,7 @@ resource "yandex_vpc_security_group" "control_plane" {
     v4_cidr_blocks = var.api_allowed_cidrs
   }
 
-  # Kubernetes API (6443 — для доступа к API напрямую)
+  # Kubernetes API (6443 - для доступа к API напрямую)
   ingress {
     protocol       = "TCP"
     description    = "Kubernetes API"

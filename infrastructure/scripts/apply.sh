@@ -3,7 +3,7 @@
 
 set -e
 
-ENV=${1:-dev}
+ENV=${1:-staging}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
@@ -47,4 +47,21 @@ terraform plan -var-file="environments/$ENV/terraform.tfvars"
 echo "🚀 Applying changes..."
 terraform apply -var-file="environments/$ENV/terraform.tfvars" -auto-approve
 
+# ============================================================================
+# Post-apply: установка ingress-nginx (инфраструктурный компонент)
+# ============================================================================
+
+echo ""
+echo "🔧 Setting up ingress-nginx for $ENV"
+"$SCRIPT_DIR/setup-ingress-nginx.sh" "$ENV"
+
+# ============================================================================
+# Post-apply: настройка RBAC для CI
+# ============================================================================
+
+echo ""
+echo "🔧 Setting up CI/CD RBAC for $ENV"
+"$SCRIPT_DIR/setup-ci-rbac.sh" "$ENV"
+
+echo ""
 echo "✅ Done! Cluster $ENV is ready."

@@ -26,7 +26,7 @@ Bootstrap-модуль создаёт **первичную инфраструк�
 | Static access key (Docker) | `yandex_iam_service_account_static_access_key.docker_key` | Для push/pull образов |
 | Authorized key | `yandex_iam_service_account_key.terraform_sa_key` | Для Terraform-провайдера |
 
-**Важно:** bootstrap **не создаёт** бакет для статики фронтенда — он создаётся отдельно и подключается к frontend через Helm-чарт (`values-*.yaml` → `frontend.s3.bucket`).
+**Важно:** bootstrap **не создаёт** бакет для статики фронтенда - он создаётся отдельно и подключается к frontend через Helm-чарт (`values-*.yaml` → `frontend.s3.bucket`).
 
 ---
 
@@ -81,8 +81,8 @@ yc config list
 
 | Переменная | Тип | По умолчанию | Описание |
 |---|---|---|---|
-| `cloud_id` | string | — | ID облака |
-| `folder_id` | string | — | ID каталога |
+| `cloud_id` | string | - | ID облака |
+| `folder_id` | string | - | ID каталога |
 | `bucket_name` | string | `my-terraform-state-bucket` | Имя S3-бакета для state |
 | `registry_name` | string | `momo-store-registry` | Имя Container Registry |
 | `service_account_name` | string | `terraform-sa` | Имя сервисного аккаунта |
@@ -267,7 +267,7 @@ terraform destroy
 ```
 
 **Внимание:** удалит сервисный аккаунт, бакет с Terraform state, Container Registry **и все образы в нём**.  
-Если state-бакет используется другими окружениями — **не запускать destroy**, пока они не удалены.
+Если state-бакет используется другими окружениями - **не запускать destroy**, пока они не удалены.
 
 ---
 
@@ -276,8 +276,8 @@ terraform destroy
 - **Запускается один раз** для всего проекта.
 - **Не коммитить:** `terraform.tfvars`, `key.json`, `keys.json`, `outputs.json`, `terraform.tfstate`, `terraform.tfstate.backup`. Добавьте их в `.gitignore`.
 - **Имя бакета** должно быть глобально уникальным в Yandex Cloud.
-- **Ключи sensitive** — обращаться как с паролями. Не логировать, не выводить в CI в открытом виде.
-- **Terraform state** bootstrap-модуля хранится **локально** (в папке `bootstrap/`). Это единственный state без S3-бэкенда — потому что бакет для state как раз и создаётся здесь.
+- **Ключи sensitive** - обращаться как с паролями. Не логировать, не выводить в CI в открытом виде.
+- **Terraform state** bootstrap-модуля хранится **локально** (в папке `bootstrap/`). Это единственный state без S3-бэкенда - потому что бакет для state как раз и создаётся здесь.
 - **Container Registry** используется и для Docker-образов, и (при необходимости) для Helm-чартов.
 
 ---
@@ -286,8 +286,8 @@ terraform destroy
 
 После bootstrap можно разворачивать основную инфраструктуру (`infrastructure/`):
 
-- [Networking](./networking.md) — VPC, подсети, security groups.
-- [Kubernetes Cluster](./kubernetes-cluster.md) — управляемый кластер.
-- [GitLab Runner](./gitlab-runner.md) — runner для CI/CD.
+- [Networking](./networking.md) - VPC, подсети, security groups.
+- [Kubernetes Cluster](./kubernetes-cluster.md) - управляемый кластер.
+- [GitLab Runner](./gitlab-runner.md) - runner для CI/CD.
 
-Для каждого окружения — свой workspace Terraform и свой `terraform.tfvars` в `environments/<env>/`.
+Для каждого окружения - свой workspace Terraform и свой `terraform.tfvars` в `environments/<env>/`.

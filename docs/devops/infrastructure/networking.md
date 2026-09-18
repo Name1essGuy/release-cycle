@@ -9,7 +9,7 @@
 - NAT Gateway для выхода в интернет;
 - security groups для всех компонентов кластера: control-plane, workers, GitLab Runner и Ingress LoadBalancer.
 
-Модуль не создаёт сам кластер и не управляет им — только сеть.
+Модуль не создаёт сам кластер и не управляет им - только сеть.
 
 ---
 
@@ -43,7 +43,7 @@ modules/networking/
 
 | Переменная | Тип | По умолчанию | Описание |
 |---|---|---|---|
-| `environment` | string | — | Окружение: `dev`, `staging`, `prod` |
+| `environment` | string | - | Окружение: `dev`, `staging`, `prod` |
 | `vpc_cidr` | string | `10.0.0.0/16` | CIDR блок VPC |
 | `subnet_cidrs` | list(string) | `["10.0.1.0/24", "10.0.2.0/24"]` | CIDR блоки подсетей |
 | `zones` | list(string) | `["ru-central1-a", "ru-central1-b"]` | Зоны доступности для подсетей |
@@ -57,8 +57,8 @@ modules/networking/
 ### Важные замечания по переменным
 
 - **`pod_cidr` и `service_cidr` должны совпадать с реальными диапазонами кластера.** Они задаются в `modules/kubernetes-cluster` через `cluster_ipv4_range` и `service_ipv4_range`. Если тут значения другие, SG не пропустит pod-to-pod и pod-to-service трафик, что проявится как «DNS не работает», «CoreDNS недоступен», «502 при обращении к S3 из nginx».
-- **`ssh_allowed_cidrs` и `api_allowed_cidrs` в учебном проекте — `0.0.0.0/0`.** Для production ограничьте конкретными IP.
-- **`enable_nat = false`** ломает egress в интернет: worker-ноды не смогут скачивать образы, а nginx — ходить в S3. Используйте только для полностью изолированных окружений.
+- **`ssh_allowed_cidrs` и `api_allowed_cidrs` в учебном проекте - `0.0.0.0/0`.** Для production ограничьте конкретными IP.
+- **`enable_nat = false`** ломает egress в интернет: worker-ноды не смогут скачивать образы, а nginx - ходить в S3. Используйте только для полностью изолированных окружений.
 
 ---
 
@@ -158,12 +158,12 @@ module "networking" {
 
 NLB (Network Load Balancer) сам не генерирует трафик, но Yandex Cloud требует, чтобы SG для LB имел egress-правило. Без него LB не сможет устанавливать соединения с target group.
 
-### Почему в workers два health check-порта — 10501 и 10256?
+### Почему в workers два health check-порта - 10501 и 10256?
 
-- **10501** — исторический порт health check для managed Kubernetes LB. Иногда используется как fallback.
-- **10256** — порт `kube-proxy` health endpoint (`/healthz`). Именно на него Yandex Cloud CCM настраивает health check для NLB по умолчанию.
+- **10501** - исторический порт health check для managed Kubernetes LB. Иногда используется как fallback.
+- **10256** - порт `kube-proxy` health endpoint (`/healthz`). Именно на него Yandex Cloud CCM настраивает health check для NLB по умолчанию.
 
-Если в target group health check идёт на 10256, а в SG workers его нет — все ноды будут `UNHEALTHY`, и LB отдаст 503.
+Если в target group health check идёт на 10256, а в SG workers его нет - все ноды будут `UNHEALTHY`, и LB отдаст 503.
 
 ### Почему `pod_cidr` и `service_cidr` в SG?
 
@@ -211,9 +211,9 @@ yc vpc route-table list
 
 Модуль отдаёт ID ресурсов, которые используются:
 
-- `modules/kubernetes-cluster` — `vpc_id`, `subnet_ids`, `control_plane_security_group_id`, `workers_security_group_id`;
-- `modules/gitlab-runner` — `subnet_ids[0]`, `gitlab_runner_security_group_id`;
-- **Helm-чарт `momo-store`** — `ingress_lb_security_group_id` (через `values-*.yaml` → аннотация `yandex.cloud/security-group-ids` на сервисе ingress-nginx).
+- `modules/kubernetes-cluster` - `vpc_id`, `subnet_ids`, `control_plane_security_group_id`, `workers_security_group_id`;
+- `modules/gitlab-runner` - `subnet_ids[0]`, `gitlab_runner_security_group_id`;
+- **Helm-чарт `momo-store`** - `ingress_lb_security_group_id` (через `values-*.yaml` → аннотация `yandex.cloud/security-group-ids` на сервисе ingress-nginx).
 
 ---
 
@@ -259,4 +259,4 @@ yc vpc subnet get <subnet-id> --format json | jq '.route_table_id'
 
 ## 🧹 Удаление
 
-`terraform destroy -target=module.networking` удалит VPC со всеми подсетями, SG и NAT. **Нельзя** выполнить, пока в VPC есть ресурсы (кластер, ВМ) — сначала удалите их.
+`terraform destroy -target=module.networking` удалит VPC со всеми подсетями, SG и NAT. **Нельзя** выполнить, пока в VPC есть ресурсы (кластер, ВМ) - сначала удалите их.

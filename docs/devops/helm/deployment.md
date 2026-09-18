@@ -23,7 +23,7 @@ yc vpc security-group get --name <env>-sg-ingress-lb --format json | jq -r '.id'
 kubectl get secret ycr-secret -n default
 ```
 
-Если нет — создайте:
+Если нет - создайте:
 
 ```bash
 kubectl create secret docker-registry ycr-secret \

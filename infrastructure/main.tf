@@ -66,6 +66,7 @@ module "gitlab_runner" {
   source = "./modules/gitlab-runner"
   count  = local.environment != "dev" ? 1 : 0
 
+  folder_id          = var.folder_id
   environment        = local.environment
   gitlab_url         = var.gitlab_url
   gitlab_token       = var.gitlab_token[local.environment]

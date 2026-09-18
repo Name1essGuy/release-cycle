@@ -26,25 +26,25 @@ Yandex Cloud берёт на себя control-plane (master-ноды, etcd, kube
 
 | Переменная | Тип | По умолчанию | Обязательная | Описание |
 |---|---|---|---|---|
-| `environment` | string | — | ✅ | Окружение: `dev`, `staging`, `prod` |
-| `folder_id` | string | — | ✅ | ID каталога |
-| `network_id` | string | — | ✅ | ID VPC |
-| `subnet_id` | string | — | ✅ | ID подсети |
+| `environment` | string | - | ✅ | Окружение: `dev`, `staging`, `prod` |
+| `folder_id` | string | - | ✅ | ID каталога |
+| `network_id` | string | - | ✅ | ID VPC |
+| `subnet_id` | string | - | ✅ | ID подсети |
 | `zone` | string | `ru-central1-a` | ❌ | Зона доступности |
 | `k8s_version` | string | `1.32` | ❌ | Версия Kubernetes |
 | `worker_count` | number | `1` | ❌ | Количество worker-нод |
 | `worker_cores` | number | `2` | ❌ | CPU на ноду |
 | `worker_memory` | number | `4` | ❌ | RAM на ноду (ГБ) |
 | `worker_disk_size` | number | `30` | ❌ | Размер диска (ГБ) |
-| `cluster_security_group_id` | string | — | ✅ | SG для control-plane |
-| `worker_security_group_id` | string | — | ✅ | SG для worker-нод |
+| `cluster_security_group_id` | string | - | ✅ | SG для control-plane |
+| `worker_security_group_id` | string | - | ✅ | SG для worker-нод |
 | `tags` | map(string) | `{}` | ❌ | Дополнительные метки |
 
 ### Важные замечания по переменным
 
 - **`folder_id` обязателен.** IAM-ресурсы (`yandex_resourcemanager_folder_iam_member`) не подхватывают его из `YC_FOLDER_ID` автоматически.
-- **`k8s_version`** — используйте только актуальные версии (1.32–1.35). Старые могут быть недоступны в Yandex Cloud.
-- **`worker_count`** — в `dev` обычно 1, в `staging` 2, в `prod` 3.
+- **`k8s_version`** - используйте только актуальные версии (1.32–1.35). Старые могут быть недоступны в Yandex Cloud.
+- **`worker_count`** - в `dev` обычно 1, в `staging` 2, в `prod` 3.
 - **`cluster_security_group_id`** и **`worker_security_group_id`** приходят из `module.networking`.
 
 ---
@@ -98,7 +98,7 @@ module "kubernetes_cluster" {
 
 ## 📋 Сервисные аккаунты и роли
 
-### `k8s_sa` — `<env>-k8s-sa`
+### `k8s_sa` - `<env>-k8s-sa`
 
 | Роль | Назначение |
 |---|---|
@@ -107,7 +107,7 @@ module "kubernetes_cluster" {
 | `load-balancer.admin` | Создание/удаление NLB |
 | `logging.writer` | Отправка логов в Yandex Cloud Logging |
 
-### `node_sa` — `<env>-k8s-node-sa`
+### `node_sa` - `<env>-k8s-node-sa`
 
 | Роль | Назначение |
 |---|---|
@@ -158,7 +158,7 @@ module "kubernetes_cluster" {
 
 ### `public_ip = true` на master
 
-Даёт публичный endpoint API-сервера. Удобно для локального `kubectl` и CI, но **небезопасно** для production — открытый API видят все. В prod стоит:
+Даёт публичный endpoint API-сервера. Удобно для локального `kubectl` и CI, но **небезопасно** для production - открытый API видят все. В prod стоит:
 
 - закрыть доступ через `api_allowed_cidrs` в SG control-plane (уже есть);
 - либо использовать `public_ip = false` и ходить через VPN/bastion.
@@ -169,7 +169,7 @@ module "kubernetes_cluster" {
 
 ### Auto upgrade / auto repair
 
-Кластер сам обновляет ноды и восстанавливает их при сбое. `maintenance_window` задаёт время, когда это делается — важно, чтобы попадало в окно низкой нагрузки.
+Кластер сам обновляет ноды и восстанавливает их при сбое. `maintenance_window` задаёт время, когда это делается - важно, чтобы попадало в окно низкой нагрузки.
 
 ---
 
@@ -184,8 +184,8 @@ module "kubernetes_cluster" {
 
 Что **отдаёт**:
 
-- `cluster_id`, `cluster_name`, `cluster_endpoint`, `cluster_ca_certificate` — в `infrastructure/outputs.tf` и дальше в CI;
-- `node_group_id`, `node_group_name` — для отладки и мониторинга.
+- `cluster_id`, `cluster_name`, `cluster_endpoint`, `cluster_ca_certificate` - в `infrastructure/outputs.tf` и дальше в CI;
+- `node_group_id`, `node_group_name` - для отладки и мониторинга.
 
 ---
 
@@ -193,14 +193,14 @@ module "kubernetes_cluster" {
 
 ### Кластер зависает в `PROVISIONING`
 
-Обычно — не применились IAM-роли. Проверьте:
+Обычно - не применились IAM-роли. Проверьте:
 
 ```bash
 yc managed-kubernetes cluster get <cluster-id> --format json | jq '.status'
 yc resource-manager folder list-access-bindings <folder-id>
 ```
 
-Если роли на месте, но кластер всё равно не поднимается — смотрите события:
+Если роли на месте, но кластер всё равно не поднимается - смотрите события:
 
 ```bash
 yc managed-kubernetes cluster list-operations <cluster-id>
@@ -208,7 +208,7 @@ yc managed-kubernetes cluster list-operations <cluster-id>
 
 ### Worker-ноды `NotReady`
 
-Обычно — SG workers не пропускает нужный трафик. Проверьте, что в SG есть:
+Обычно - SG workers не пропускает нужный трафик. Проверьте, что в SG есть:
 
 - kubelet API (10250) из `vpc_cidr`;
 - pod CIDR и service CIDR (для overlay-трафика);
@@ -221,7 +221,7 @@ yc managed-kubernetes cluster get-credentials --name <cluster-name> --external -
 kubectl get nodes
 ```
 
-Если `get-credentials` возвращает ошибку — проверьте права пользователя/SA в каталоге.
+Если `get-credentials` возвращает ошибку - проверьте права пользователя/SA в каталоге.
 
 ### Создание кластера занимает 10–20 минут
 
@@ -235,4 +235,4 @@ kubectl get nodes
 terraform destroy -target=module.kubernetes_cluster
 ```
 
-Удалит кластер и node group. **Нельзя** удалить, пока внутри кластера есть PVC с динамическими дисками, LB-сервисы или ingress-nginx — сначала удалите Helm-релизы.
+Удалит кластер и node group. **Нельзя** удалить, пока внутри кластера есть PVC с динамическими дисками, LB-сервисы или ingress-nginx - сначала удалите Helm-релизы.

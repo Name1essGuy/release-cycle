@@ -33,7 +33,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{/*
 Возвращает IP DNS-резолвера для nginx.
 Приоритет:
-1. .Values.frontend.dnsResolver (если задан явно — например 169.254.25.10)
+1. .Values.frontend.dnsResolver (если задан явно - например 169.254.25.10)
 2. ClusterIP сервиса kube-dns (через lookup)
 3. 169.254.25.10 (жёсткий fallback)
 */}}

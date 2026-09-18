@@ -6,7 +6,12 @@
 
 Модуль `networking` создаёт VPC, подсети, NAT, security groups. Модуль `kubernetes-cluster` разворачивает managed Kubernetes. Модуль `gitlab-runner` - опционально - разворачивает ВМ с GitLab Runner.
 
-После `terraform apply` скрипт `apply.sh` **автоматически** настраивает RBAC в кластере для CI/CD через `setup-ci-rbac.sh` - создаёт ServiceAccount, Role, RoleBinding и долгоживущий токен, а затем прописывает kubeconfig в переменную GitLab.
+После `terraform apply` скрипт `apply.sh` делает **две вещи**:
+
+1. **`setup-ingress-nginx.sh`** - устанавливает `ingress-nginx` в кластер как cluster-wide инфраструктурный компонент (требует admin-доступа, но ставится один раз).
+2. **`setup-ci-rbac.sh`** - настраивает ограниченный RBAC для GitLab CI и прописывает kubeconfig в переменную GitLab.
+
+Разделение важно: `ingress-nginx` создаёт cluster-wide ресурсы (`ClusterRole`, `ClusterRoleBinding`, webhook-конфигурации), которые не должен уметь создавать CI. CI деплоит **только приложение** - `Deployment`, `Service`, `Ingress`, `ConfigMap` - в namespace `default`.
 
 ---
 
@@ -47,6 +52,13 @@
 │  │   │  │ kubelet,      │  │ kubelet,      │  │ kubelet,   │   │          │  │
 │  │   │  │ kube-proxy    │  │ kube-proxy    │  │ kube-proxy │   │          │  │
 │  │   │  └───────────────┘  └───────────────┘  └────────────┘   │          │  │
+│  │   │                                                         │          │  │
+│  │   │  ┌────────────────────────────────────────┐             │          │  │
+│  │   │  │ Ingress-Nginx (namespace ingress-nginx)│             │          │  │
+│  │   │  │  • Controller + LoadBalancer           │             │          │  │
+│  │   │  │  • ClusterRole, ClusterRoleBinding     │             │          │  │
+│  │   │  │  • Устанавливается один раз cluster-admin           │          │  │
+│  │   │  └────────────────────────────────────────┘             │          │  │
 │  │   │                                                         │          │  │
 │  │   │  ┌────────────────────────────────────────┐             │          │  │
 │  │   │  │ CI/CD RBAC                             │             │          │  │
@@ -114,8 +126,9 @@ infrastructure/
 │           └── install-runner.sh
 │
 ├── scripts/
-│   ├── apply.sh                     # Применение Terraform + настройка RBAC
-│   └── setup-ci-rbac.sh             # Настройка RBAC в кластере для GitLab CI
+│   ├── apply.sh                     # Terraform apply + ingress-nginx + RBAC
+│   ├── setup-ingress-nginx.sh       # Установка ingress-nginx (cluster-admin)
+│   └── setup-ci-rbac.sh             # Настройка RBAC для GitLab CI
 │
 ├── .gitignore
 ├── backend.tf                       # S3 backend для state
@@ -136,7 +149,8 @@ infrastructure/
 | Terraform | ≥ 1.5.0 | Управление инфраструктурой |
 | Yandex Cloud CLI | последняя | Взаимодействие с YC |
 | kubectl | ≥ 1.28 | Управление Kubernetes |
-| curl | последняя | Для обновления переменных GitLab через API |
+| helm | ≥ 3.12 | Установка ingress-nginx и чартов |
+| curl | последняя | Обновление переменных GitLab через API |
 | Git | последняя | Контроль версий |
 
 ### 2. Доступы в Yandex Cloud
@@ -144,6 +158,7 @@ infrastructure/
 - Аккаунт в Yandex Cloud.
 - Права на создание VPC, Compute, Object Storage.
 - Сервисный аккаунт с ролями `editor` + `storage.editor` (создаётся в `bootstrap`).
+- **Admin-доступ к кластеру** - для `setup-ingress-nginx.sh`. Используется `yc managed-kubernetes cluster get-credentials` с вашим пользовательским аккаунтом.
 
 ### 3. Доступы в GitLab
 
@@ -166,8 +181,8 @@ export AWS_SECRET_ACCESS_KEY="<secret-key>"
 export TF_VAR_gitlab_token='{"staging": "glrt-xxxx", "prod": "glrt-xxxx"}'
 
 # Для автоматической настройки RBAC (setup-ci-rbac.sh)
-export GITLAB_TOKEN="<gitlab_api_acess_token>"          # Personal Access Token со scope api
-export GITLAB_PROJECT_ID="<gitlab_project_id>"          # ID проекта в GitLab
+export GITLAB_TOKEN="<gitlab_api_access_token>"    # Personal Access Token со scope api
+export GITLAB_PROJECT_ID="<gitlab_project_id>"     # ID проекта в GitLab
 export GITLAB_URL="<gitlab_instance_url>"
 ```
 
@@ -211,16 +226,21 @@ cp environments/staging/terraform.tfvars.example environments/staging/terraform.
 ./scripts/apply.sh prod
 ```
 
-Скрипт `apply.sh` делает **две вещи**:
+Скрипт `apply.sh` делает **три этапа**:
 
 1. **Terraform apply** - создаёт/обновляет инфраструктуру.
    - Выбирает/создаёт Terraform workspace.
    - Запускает `terraform init`, `fmt`, `validate`, `plan`, `apply`.
 
-2. **Настройка RBAC для CI/CD** (см. `setup-ci-rbac.sh`):
-   - Подключается к кластеру через `yc managed-kubernetes cluster get-credentials`.
+2. **`setup-ingress-nginx.sh`** - устанавливает `ingress-nginx`:
+   - Получает `ingress_lb_security_group_id` из `terraform output`.
+   - Получает админский kubeconfig через `yc`.
+   - `helm upgrade --install ingress-nginx` в namespace `ingress-nginx`.
+   - Дожидается появления внешнего IP LoadBalancer'а.
+
+3. **`setup-ci-rbac.sh`** - настраивает RBAC для CI:
    - Создаёт `ServiceAccount`, `Role`, `RoleBinding` в namespace `default`.
-   - Создаёт долгоживущий токен через `Secret` типа `service-account-token`.
+   - Создаёт долгоживущий токен через `Secret`.
    - Собирает kubeconfig с токеном.
    - Обновляет переменную `KUBE_CONFIG_<ENV>` в GitLab через API.
 
@@ -240,6 +260,106 @@ kubectl get nodes
 ```bash
 terraform output -raw cluster_name
 ```
+
+---
+
+## 🌐 Ingress-Nginx
+
+`ingress-nginx` - **инфраструктурный компонент**, а не часть приложения. Он создаёт cluster-wide ресурсы (`ClusterRole`, `ClusterRoleBinding`, webhook-конфигурации), которые устанавливаются **один раз на кластер** с admin-правами.
+
+### Почему отдельно от Helm-чарта `momo-store`
+
+Раньше `ingress-nginx` был зависимостью Helm-чарта `momo-store`. Это создавало проблему: CI-раннер с ограниченным RBAC (`ci-deployer`, namespace-scoped) не мог создать `ClusterRole`, и `helm upgrade` падал с:
+
+```
+clusterroles.rbac.authorization.k8s.io "momo-store-ingress-nginx" is forbidden:
+User "system:serviceaccount:default:ci-deployer"
+cannot get resource "clusterroles" in API group "rbac.authorization.k8s.io"
+at the cluster scope
+```
+
+Теперь `ingress-nginx` устанавливается отдельно админом, а `momo-store` управляет только namespace-scoped ресурсами. CI не трогает cluster-wide.
+
+### Скрипт `setup-ingress-nginx.sh`
+
+**Что делает:**
+
+1. Получает `ingress_lb_security_group_id`:
+   - Из переменной `INGRESS_LB_SG_ID`, если задана.
+   - Или из `terraform output -raw ingress_lb_security_group_id`.
+
+2. Получает админский kubeconfig:
+   ```bash
+   yc managed-kubernetes cluster get-credentials \
+       --name <env>-managed-k8s --external --force
+   ```
+
+3. Добавляет Helm-репозиторий `ingress-nginx`.
+
+4. Устанавливает/обновляет chart:
+   ```bash
+   helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+       --namespace ingress-nginx \
+       --create-namespace \
+       --version 4.11.0 \
+       --set controller.service.annotations."yandex\.cloud/load-balancer-type"=external \
+       --set controller.service.annotations."yandex\.cloud/security-group-ids"=<sg-id> \
+       --set controller.admissionWebhooks.enabled=false \
+       --wait --timeout 5m
+   ```
+
+5. Ждёт появления внешнего IP у LoadBalancer'а (до 5 минут).
+
+### Запуск вручную
+
+Если нужно установить `ingress-nginx` без `terraform apply`:
+
+```bash
+cd infrastructure
+
+# Вариант 1: скрипт сам возьмёт SG-ID из terraform output
+./scripts/setup-ingress-nginx.sh staging
+
+# Вариант 2: SG-ID передаётся явно
+export INGRESS_LB_SG_ID="<sg-id>"
+./scripts/setup-ingress-nginx.sh staging
+
+# Вариант 3: другая версия chart
+export INGRESS_NGINX_VERSION="4.10.0"
+./scripts/setup-ingress-nginx.sh staging
+```
+
+### Параметры скрипта
+
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `INGRESS_LB_SG_ID` | из `terraform output` | Security Group для LoadBalancer |
+| `INGRESS_NGINX_VERSION` | `4.11.0` | Версия Helm-чарта |
+
+### Проверка после установки
+
+```bash
+# Release установлен
+helm list -n ingress-nginx
+
+# Поды работают
+kubectl get pods -n ingress-nginx
+
+# LoadBalancer получил IP
+kubectl get svc ingress-nginx-controller -n ingress-nginx \
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+
+# Проверка
+curl -I http://<EXTERNAL-IP>/
+```
+
+### Что видит ingress-nginx
+
+- Namespace `ingress-nginx`.
+- Release `ingress-nginx`.
+- Внешний IP LoadBalancer'а - **не меняется** при деплоях `momo-store`.
+
+Ingress-объекты из `momo-store` (в namespace `default`) просто указывают `ingressClassName: nginx` - и `ingress-nginx` их подхватывает.
 
 ---
 
@@ -282,7 +402,7 @@ terraform output -raw cluster_name
 
 ```bash
 cd infrastructure
-export GITLAB_TOKEN="<gitlab_api_acess_token>"
+export GITLAB_TOKEN="<gitlab_api_access_token>"
 export GITLAB_PROJECT_ID="<gitlab_project_id>"
 export GITLAB_URL="<gitlab_instance_url>"
 
@@ -358,8 +478,9 @@ terraform workspace new prod
 
 | Команда | Описание |
 |---|---|
-| `./scripts/apply.sh staging` | Развернуть/обновить staging + настроить RBAC |
-| `./scripts/apply.sh prod` | Развернуть/обновить prod + настроить RBAC |
+| `./scripts/apply.sh staging` | Развернуть/обновить staging + ingress-nginx + RBAC |
+| `./scripts/apply.sh prod` | Развернуть/обновить prod + ingress-nginx + RBAC |
+| `./scripts/setup-ingress-nginx.sh staging` | Только установить ingress-nginx |
 | `./scripts/setup-ci-rbac.sh staging` | Только настроить RBAC (без Terraform) |
 | `terraform plan` | Просмотр планируемых изменений |
 | `terraform apply` | Применение изменений |
@@ -384,22 +505,14 @@ terraform output -raw cluster_endpoint
 # Команда для получения kubeconfig
 terraform output -raw get_kubeconfig_command
 
-# ID Security Group для Ingress LB (нужен для Helm-чарта)
+# ID Security Group для Ingress LB (используется setup-ingress-nginx.sh)
 terraform output -raw ingress_lb_security_group_id
 
 # IP GitLab Runner (только staging/prod)
 terraform output -raw gitlab_runner_ip
 ```
 
-`ingress_lb_security_group_id` особенно важен - его надо подставить в Helm-чарт `momo-store`:
-
-```yaml
-ingress-nginx:
-  controller:
-    service:
-      annotations:
-        yandex.cloud/security-group-ids: "<ingress_lb_security_group_id>"
-```
+`ingress_lb_security_group_id` используется **автоматически** в `setup-ingress-nginx.sh` - он подставляет его в аннотацию LoadBalancer'а `ingress-nginx`. Вручную ничего подставлять не надо.
 
 ---
 
@@ -416,7 +529,7 @@ ingress-nginx:
 - В учебном проекте `ssh_allowed_cidrs` = `0.0.0.0/0`. Для production ограничьте конкретными IP.
 - `api_allowed_cidrs` для K8s API - тоже стоит ограничить в prod.
 - `master.public_ip = true` даёт публичный endpoint API; в prod рассмотрите VPN/bastion.
-- **CI-токен ограничен namespace `default`** - если утечёт, злоумышленник получит доступ только к этому namespace, не к кластеру целиком.
+- **`ingress-nginx` устанавливается админом** (cluster-wide ресурсы), а **CI имеет ограниченный namespace-scoped доступ** - это правильное разделение привилегий.
 
 ### Terraform state
 
@@ -434,11 +547,13 @@ ingress-nginx:
 - [Networking](./networking.md) - VPC, подсети, NAT, security groups
 - [Kubernetes Cluster](./kubernetes-cluster.md) - managed K8s
 - [GitLab Runner](./gitlab-runner.md) - установка раннера
+- [Helm-чарт momo-store](../helm/readme.md) - деплой приложения
 
 ### Внешние ресурсы
 
 - [Terraform Yandex Cloud Provider](https://registry.terraform.io/providers/yandex-cloud/yandex/latest/docs)
 - [Yandex Cloud документация](https://cloud.yandex.ru/docs)
 - [Kubernetes документация](https://kubernetes.io/docs/)
+- [ingress-nginx Helm chart](https://github.com/kubernetes/ingress-nginx/tree/main/charts/ingress-nginx)
 - [GitLab Runner документация](https://docs.gitlab.com/runner/)
 - [GitLab API: project variables](https://docs.gitlab.com/ee/api/project_level_variables.html)

@@ -1,0 +1,256 @@
+# .gitlab-ci.yml
+
+stages:
+  - test
+  - build
+  - deploy
+
+variables:
+  DOCKER_DRIVER: overlay2
+  BACKEND_IMAGE: "cr.yandex/crpcti5ji1nf9q4ofu6j/momo-store-backend"
+  FRONTEND_UPLOADER_IMAGE: "cr.yandex/crpcti5ji1nf9q4ofu6j/momo-store-frontend-uploader"
+  HELM_CHART_DIR: "k8s/helm/momo-store"
+  S3_ENDPOINT: "https://storage.yandexcloud.net"
+  S3_PREFIX: "momo-store"
+
+# ============================================================================
+# TEST
+# ============================================================================
+
+test:backend:
+  stage: test
+  image: golang:1.25-alpine
+  tags: [docker, staging]
+  interruptible: true
+  variables:
+    GOPATH: $CI_PROJECT_DIR/.go
+    GOCACHE: $CI_PROJECT_DIR/.go/cache
+    GOMODCACHE: $CI_PROJECT_DIR/.go/pkg/mod
+  cache:
+    key:
+      files:
+        - services/backend/go.sum
+    paths:
+      - .go/pkg/mod/
+      - .go/cache/
+  script:
+    - cd services/backend
+    - go vet ./...
+    - go test ./... -v
+
+test:frontend:
+  stage: test
+  image: node:18-alpine
+  tags: [docker, staging]
+  interruptible: true
+  cache:
+    key:
+      files:
+        - services/frontend/package-lock.json
+    paths:
+      - services/frontend/node_modules/
+      - services/frontend/.npm/
+  script:
+    - cd services/frontend
+    - npm ci --cache .npm --prefer-offline --no-audit
+    - npm run lint --if-present
+
+lint:helm:
+  stage: test
+  image: alpine:3.20
+  tags: [docker, staging]
+  interruptible: true
+  before_script:
+    - apk add --no-cache helm
+  script:
+    - helm lint "${HELM_CHART_DIR}"
+
+# ============================================================================
+# BUILD (без push) - feature/fix
+# ============================================================================
+
+build:backend:
+  stage: build
+  image: docker:27
+  tags: [docker, staging]
+  interruptible: true
+  services:
+    - name: docker:27-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^(feature|fix)\//'
+  script:
+    - docker build
+        --target production
+        --build-arg BACKEND_VERSION="${CI_COMMIT_SHORT_SHA}"
+        -t "${BACKEND_IMAGE}:${CI_COMMIT_SHORT_SHA}"
+        ./services/backend
+    - echo "✅ Backend built (no push)"
+
+build:frontend-uploader:
+  stage: build
+  image: docker:27
+  tags: [docker, staging]
+  interruptible: true
+  services:
+    - name: docker:27-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^(feature|fix)\//'
+  script:
+    - docker build
+        --target uploader
+        --build-arg VUE_APP_API_URL="/api"
+        --build-arg VUE_APP_VERSION="${CI_COMMIT_SHORT_SHA}"
+        -t "${FRONTEND_UPLOADER_IMAGE}:${CI_COMMIT_SHORT_SHA}"
+        ./services/frontend
+    - echo "✅ Frontend uploader built (no push)"
+
+# ============================================================================
+# PUSH - ci/main
+# ============================================================================
+
+push:backend:
+  stage: build
+  image: docker:27
+  tags: [docker, staging]
+  services:
+    - name: docker:27-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH =~ /^ci\//'
+  before_script:
+    - echo "$YC_SA_KEY_JSON" | base64 -d > /tmp/key.json
+    - docker login --username json_key --password-stdin cr.yandex < /tmp/key.json
+    - rm -f /tmp/key.json
+    - docker pull "${BACKEND_IMAGE}:latest" || true
+  script:
+    - docker build
+        --target production
+        --build-arg BACKEND_VERSION="${CI_COMMIT_SHORT_SHA}"
+        --build-arg BUILDKIT_INLINE_CACHE=1
+        --cache-from "${BACKEND_IMAGE}:latest"
+        -t "${BACKEND_IMAGE}:${CI_COMMIT_SHORT_SHA}"
+        -t "${BACKEND_IMAGE}:latest"
+        ./services/backend
+    - docker push "${BACKEND_IMAGE}:${CI_COMMIT_SHORT_SHA}"
+    - docker push "${BACKEND_IMAGE}:latest"
+    - echo "✅ Backend pushed"
+
+push:frontend-uploader:
+  stage: build
+  image: docker:27
+  tags: [docker, staging]
+  services:
+    - name: docker:27-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH =~ /^ci\//'
+  before_script:
+    - echo "$YC_SA_KEY_JSON" | base64 -d > /tmp/key.json
+    - docker login --username json_key --password-stdin cr.yandex < /tmp/key.json
+    - rm -f /tmp/key.json
+    - docker pull "${FRONTEND_UPLOADER_IMAGE}:latest" || true
+  script:
+    - docker build
+        --target uploader
+        --build-arg VUE_APP_API_URL="/api"
+        --build-arg VUE_APP_VERSION="${CI_COMMIT_SHORT_SHA}"
+        --build-arg BUILDKIT_INLINE_CACHE=1
+        --cache-from "${FRONTEND_UPLOADER_IMAGE}:latest"
+        -t "${FRONTEND_UPLOADER_IMAGE}:${CI_COMMIT_SHORT_SHA}"
+        -t "${FRONTEND_UPLOADER_IMAGE}:latest"
+        ./services/frontend
+    - docker push "${FRONTEND_UPLOADER_IMAGE}:${CI_COMMIT_SHORT_SHA}"
+    - docker push "${FRONTEND_UPLOADER_IMAGE}:latest"
+    - echo "✅ Frontend uploader pushed"
+
+# ============================================================================
+# DEPLOY - ci/main
+# ============================================================================
+
+upload-static:staging:
+  stage: deploy
+  image: docker:27
+  tags: [docker, staging]
+  needs:
+    - push:frontend-uploader
+  services:
+    - name: docker:27-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH =~ /^ci\//'
+  environment:
+    name: staging
+  before_script:
+    - echo "$YC_SA_KEY_JSON" | base64 -d > /tmp/key.json
+    - docker login --username json_key --password-stdin cr.yandex < /tmp/key.json
+    - rm -f /tmp/key.json
+  script:
+    - |
+      docker run --rm \
+        -e S3_BUCKET="${S3_BUCKET}" \
+        -e S3_ENDPOINT="${S3_ENDPOINT}" \
+        -e S3_PREFIX="${S3_PREFIX}" \
+        -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
+        -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
+        -e AWS_DEFAULT_REGION=ru-central1 \
+        "${FRONTEND_UPLOADER_IMAGE}:${CI_COMMIT_SHORT_SHA}"
+    - echo "✅ Static uploaded to s3://${S3_BUCKET}/${S3_PREFIX}/"
+
+deploy:staging:
+  stage: deploy
+  image: alpine:3.20
+  tags: [docker, staging]
+  needs:
+    - push:backend
+    - push:frontend-uploader
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH =~ /^ci\//'
+  environment:
+    name: staging
+  before_script:
+    - apk add --no-cache helm kubectl
+    - echo "$KUBE_CONFIG_STAGING" | base64 -d > /tmp/kubeconfig
+    - chmod 600 /tmp/kubeconfig
+    - export KUBECONFIG=/tmp/kubeconfig
+  script:
+    - |
+      helm upgrade -i momo-store "${HELM_CHART_DIR}" \
+        -f "${HELM_CHART_DIR}/values.yaml" \
+        -f "${HELM_CHART_DIR}/values-staging.yaml" \
+        --set backend.image.tag="${CI_COMMIT_SHORT_SHA}" \
+        --namespace default \
+        --wait --timeout 5m
+    - kubectl rollout restart deployment/momo-store-frontend -n default
+    - kubectl rollout status deployment/momo-store-frontend -n default --timeout=120s
+    - echo "✅ Deployment complete"

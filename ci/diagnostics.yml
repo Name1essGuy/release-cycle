@@ -1,0 +1,136 @@
+# ci/diagnostics.yml
+#
+# Диагностические джобы. Скрыты по умолчанию.
+#
+# Запуск:
+#   RUN_DIAGNOSTICS=true    → все джобы запускаются автоматически
+#   RUN_DIAGNOSTICS=manual  → все джобы серыми, запускать вручную (▶)
+#   без переменной          → джоб не видно
+#
+# ВАЖНО: `stages` объявляется в основном .gitlab-ci.yml.
+# В этом файле stages НЕ объявляем.
+
+.diag_rules: &diag_rules
+  - if: '$RUN_DIAGNOSTICS == "true"'
+    when: always
+  - if: '$RUN_DIAGNOSTICS == "manual"'
+    when: manual
+    allow_failure: true
+  - when: never
+
+diag:network:
+  stage: diagnostics
+  image: alpine:3.20
+  tags: [docker, staging]
+  rules: *diag_rules
+  before_script:
+    - apk add --no-cache curl
+  script:
+    - |
+      check() {
+        local name="$1"
+        local url="$2"
+        if curl -sI --max-time 5 -o /dev/null "$url"; then
+          echo "✅ $name OK"
+        else
+          echo "❌ $name FAIL"
+          return 1
+        fi
+      }
+      check "GitLab"          "https://praktikum.gitlab.yandexcloud.net"
+      check "cr.yandex"       "https://cr.yandex"
+      check "S3"              "https://storage.yandexcloud.net"
+      check "registry.k8s.io" "https://registry.k8s.io"
+      check "docker.io"       "https://registry-1.docker.io"
+
+diag:dind:
+  stage: diagnostics
+  image: docker:27
+  tags: [docker, staging]
+  rules: *diag_rules
+  services:
+    - name: docker:27-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
+  script:
+    - docker info | head -30
+    - docker run --rm alpine:latest echo "dind works"
+
+diag:registry-login:
+  stage: diagnostics
+  image: docker:27
+  tags: [docker, staging]
+  rules: *diag_rules
+  services:
+    - name: docker:27-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
+  before_script:
+    - echo "$YC_SA_KEY_JSON" | base64 -d > /tmp/key.json
+    - docker login --username json_key --password-stdin cr.yandex < /tmp/key.json
+    - rm -f /tmp/key.json
+  script:
+    - echo "login OK"
+
+diag:s3:
+  stage: diagnostics
+  image: alpine:3.20
+  tags: [docker, staging]
+  rules: *diag_rules
+  script:
+    - apk add --no-cache aws-cli
+    - export AWS_DEFAULT_REGION=ru-central1
+    - echo "test" > /tmp/test.txt
+    - aws --endpoint-url=https://storage.yandexcloud.net s3 cp /tmp/test.txt "s3://${S3_BUCKET}/_ci_test.txt"
+    - aws --endpoint-url=https://storage.yandexcloud.net s3 rm "s3://${S3_BUCKET}/_ci_test.txt"
+    - echo "✅ S3 works"
+
+diag:kubectl:
+  stage: diagnostics
+  image: alpine:3.20
+  tags: [docker, staging]
+  rules: *diag_rules
+  before_script:
+    - apk add --no-cache kubectl
+    - echo "$KUBE_CONFIG_STAGING" | base64 -d > /tmp/kubeconfig
+    - export KUBECONFIG=/tmp/kubeconfig
+  script:
+    - kubectl config current-context
+    - kubectl get pods -n default
+    - kubectl get deployments -n default
+    - kubectl get services -n default
+    - kubectl get ingress -n default
+
+diag:helm-lint:
+  stage: diagnostics
+  image: alpine:3.20
+  tags: [docker, staging]
+  rules: *diag_rules
+  before_script:
+    - apk add --no-cache helm
+  script:
+    - helm version
+    - helm lint k8s/helm/momo-store
+
+diag:helm-template:
+  stage: diagnostics
+  image: alpine:3.20
+  tags: [docker, staging]
+  rules: *diag_rules
+  before_script:
+    - apk add --no-cache helm
+  script:
+    - |
+      helm template momo-store k8s/helm/momo-store \
+        -f k8s/helm/momo-store/values.yaml \
+        -f k8s/helm/momo-store/values-staging.yaml > /tmp/rendered.yaml
+    - echo "Rendered $(wc -l < /tmp/rendered.yaml) lines"
+    - head -50 /tmp/rendered.yaml

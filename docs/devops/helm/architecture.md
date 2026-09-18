@@ -35,7 +35,7 @@
 - Все статические файлы (js, css, img) лежат в Object Storage.
 - Frontend-Nginx проксирует их через proxy_pass в S3.
 - Префикс `momo-store/` уже в URI от браузера, поэтому `$s3_prefix` НЕ добавляется.
-- Для `location = /` используется `$s3_prefix/index.html` — потому что браузер просит `/`.
+- Для `location = /` используется `$s3_prefix/index.html` - потому что браузер просит `/`.
 
 ### DNS-резолвинг
 - Nginx использует `resolver <ClusterIP kube-dns>` для runtime-резолвинга `storage.yandexcloud.net`.

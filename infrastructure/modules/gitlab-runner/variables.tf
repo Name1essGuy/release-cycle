@@ -5,6 +5,11 @@ variable "environment" {
   type        = string
 }
 
+variable "folder_id" {
+  description = "ID каталога в Yandex Cloud"
+  type        = string
+}
+
 variable "gitlab_url" {
   description = "URL GitLab инстанса"
   type        = string
@@ -12,7 +17,7 @@ variable "gitlab_url" {
 }
 
 variable "gitlab_token" {
-  description = "Токен для регистрации GitLab Runner"
+  description = "Токен project runner'а для регистрации GitLab Runner (glrt-...)"
   type        = string
   sensitive   = true
 }

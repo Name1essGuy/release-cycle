@@ -21,7 +21,7 @@ usermod -aG docker ubuntu
 systemctl enable --now docker
 
 # ============================================================================
-# 2. Запуск GitLab Runner (через sudo)
+# 2. Запуск GitLab Runner
 # ============================================================================
 
 echo "==> Starting GitLab Runner"
@@ -40,7 +40,7 @@ echo "==> Waiting for Runner"
 sleep 10
 
 # ============================================================================
-# 4. Регистрация Runner (через sudo)
+# 4. Регистрация Runner
 # ============================================================================
 
 echo "==> Registering Runner"
@@ -53,7 +53,35 @@ sudo docker exec gitlab-runner gitlab-runner register \
   --description "${environment}-runner"
 
 # ============================================================================
-# 5. Проверка статуса (через sudo)
+# 5. Настройка config.toml: privileged + volumes для dind
+# ============================================================================
+
+echo "==> Installing yq for TOML manipulation"
+sudo wget -qO /usr/local/bin/yq \
+  https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+sudo chmod +x /usr/local/bin/yq
+
+CONFIG=/etc/gitlab-runner/config.toml
+
+echo "==> Patching config.toml: privileged = true"
+sudo yq -i '.runners[0].docker.privileged = true' "$CONFIG"
+
+echo "==> Patching config.toml: volumes without /var/run/docker.sock"
+sudo yq -i '.runners[0].docker.volumes = ["/cache", "/certs/client"]' "$CONFIG"
+
+echo "==> New config.toml:"
+sudo cat "$CONFIG"
+
+# ============================================================================
+# 6. Перезапуск runner для применения конфига
+# ============================================================================
+
+echo "==> Restarting gitlab-runner"
+sudo docker restart gitlab-runner
+sleep 5
+
+# ============================================================================
+# 7. Проверка
 # ============================================================================
 
 echo "==> Done"

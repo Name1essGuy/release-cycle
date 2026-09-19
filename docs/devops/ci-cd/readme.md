@@ -6,7 +6,7 @@
 
 Дополнительно в `ci/diagnostics.yml` лежат диагностические джобы — они **не подключены** к основному пайплайну и запускаются только вручную при отладке.
 
-Раннеры работают в Yandex Cloud (ВМ `staging-runner`), созданной через Terraform-модуль `gitlab-runner`. Все джобы запускаются в Docker-контейнерах через `docker executor`.
+Раннеры работают в Yandex Cloud (ВМ `staging-runner`), созданной через Terraform-модуль `gitlab-runner`. Все джобы запускаются в Docker-контейнерах через `docker executor` с `dind`.
 
 ---
 
@@ -47,7 +47,9 @@
                               │ cr.yandex/...      │          │ Kubernetes cluster │
                               │ momo-store-backend │          │ namespace default  │
                               │ momo-store-frontend│          │ + S3 bucket        │
-                              └────────────────────┘          └────────────────────┘
+                              └────────────────────┘          │ + ServiceMonitor   │
+                                                              │ + Grafana ConfigMap│
+                                                              └────────────────────┘
 ```
 
 ---
@@ -115,6 +117,7 @@
 | `AWS_SECRET_ACCESS_KEY` | Доступ к S3 | ✅ | ❌ |
 | `S3_BUCKET` | Имя S3-бакета со статикой | ❌ | ❌ |
 | `KUBE_CONFIG_STAGING` | Kubeconfig для деплоя (base64) | ✅ | ❌ |
+| `GRAFANA_SMTP_EMAIL` | Email для алертов Grafana | ❌ | ❌ |
 
 **Важно:** флаг `Protected` **снят** со всех переменных, потому что деплой может запускаться из ветки `ci/*`, а она не protected. Если хотите защитить `main`, включите `Protected` — но тогда `ci/*` не сможет использовать эти переменные.
 
@@ -133,6 +136,11 @@ momo-store/
 │   └── frontend/               # Vue.js + uploader
 │       └── Dockerfile
 └── k8s/helm/momo-store/        # Helm-чарт
+    └── templates/
+        └── monitoring/
+            ├── servicemonitor.yaml       # ServiceMonitor для Prometheus
+            ├── grafana-dashboards.yaml   # ConfigMap с дашбордами
+            └── grafana-alerting.yaml     # ConfigMap с алертами
 ```
 
 `ci/diagnostics.yml` **не подключён** через `include`. Он лежит как резервный инструмент для отладки.
@@ -149,13 +157,92 @@ momo-store/
 4. **`push:backend`** — сборка и публикация образа `cr.yandex/.../momo-store-backend:${SHA}`.
 5. **`push:frontend-uploader`** — сборка и публикация образа `cr.yandex/.../momo-store-frontend-uploader:${SHA}`.
 6. **`upload-static:staging`** — запуск `frontend-uploader` для загрузки статики в S3 (`s3://momo-store-frontend/momo-store/`).
-7. **`deploy:staging`** — `helm upgrade -i momo-store` с тегом образа `${CI_COMMIT_SHORT_SHA}`.
+7. **`deploy:staging`** — `helm upgrade -i momo-store` с тегом образа `${CI_COMMIT_SHORT_SHA}` и email для алертов.
 
 После успешного пайплайна:
 
 - S3 содержит свежую статику.
 - В кластере — обновлённые поды `momo-store-frontend` и `momo-store-backend`.
-- Ingress-nginx (установлен отдельно админом) маршрутизирует трафик на эти поды.
+- Ingress-nginx маршрутизирует трафик на эти поды.
+- Prometheus скрейпит `/metrics` бэкенда (через ServiceMonitor).
+- Grafana показывает дашборды и может отправлять алерты.
+
+---
+
+## 🔭 Связь с observability
+
+CI/CD и observability связаны в **двух точках**.
+
+### 1. Деплой чарта `momo-store` создаёт ресурсы для мониторинга
+
+При `helm upgrade -i momo-store` в стадии **deploy** создаются:
+
+| Ресурс | Метка | Что даёт |
+|---|---|---|
+| `ServiceMonitor/momo-store-backend` | `release: monitoring` | Prometheus начинает скрейпить `/metrics` бэкенда |
+| `ConfigMap/momo-store-grafana-dashboards` | `grafana_dashboard: "1"` | Sidecar Grafana загружает три дашборда |
+| `ConfigMap/momo-store-grafana-alerting` | `grafana_alert: "1"` | Sidecar Grafana загружает contact point, алерты и notification policies |
+
+Всё это — **часть Helm-чарта**, а не отдельный шаг CI. Если чарт задеплоен — метрики и алерты работают. CI ничего дополнительно настраивать не нужно.
+
+**Проверка после деплоя:**
+
+```bash
+# ServiceMonitor создан
+kubectl get servicemonitor -n default | grep momo-store
+
+# ConfigMap с дашбордами
+kubectl get configmap -n default momo-store-grafana-dashboards
+
+# ConfigMap с алертами
+kubectl get configmap -n monitoring momo-store-grafana-alerting
+```
+
+### 2. Переменная `GRAFANA_SMTP_EMAIL` передаётся в `helm upgrade`
+
+Чтобы contact point `gmail-alerts` содержал **реальный email**, а не placeholder, в `deploy:staging` передаётся `--set monitoring.alerting.email`:
+
+```yaml
+deploy:staging:
+  stage: deploy
+  image: alpine:3.20
+  tags: [docker, staging]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH =~ /^ci\//'
+  environment:
+    name: staging
+  before_script:
+    - apk add --no-cache helm kubectl
+    - echo "$KUBE_CONFIG_STAGING" | base64 -d > /tmp/kubeconfig
+    - export KUBECONFIG=/tmp/kubeconfig
+  script:
+    - |
+      helm upgrade -i momo-store "${HELM_CHART_DIR}" \
+        -f "${HELM_CHART_DIR}/values.yaml" \
+        -f "${HELM_CHART_DIR}/values-staging.yaml" \
+        --set backend.image.tag="${CI_COMMIT_SHORT_SHA}" \
+        --set monitoring.alerting.email="${GRAFANA_SMTP_EMAIL}" \
+        --namespace default \
+        --wait --timeout 5m
+```
+
+**Без `--set monitoring.alerting.email`** в `ConfigMap/momo-store-grafana-alerting` попадёт пустое значение, и `helm upgrade` **упадёт** с ошибкой:
+
+```
+Error: UPGRADE FAILED: execution error at (momo-store/templates/monitoring/grafana-alerting.yaml:...):
+monitoring.alerting.email is required when monitoring.alerting.enabled=true
+```
+
+Это защита от случайного деплоя без email.
+
+### Связанные компоненты
+
+| Компонент | Где описан | Как связан с CI/CD |
+|---|---|---|
+| Prometheus + Grafana | [observability/readme.md](../observability/readme.md) | Устанавливается `setup-monitoring.sh`, деплой в кластер |
+| Дашборды | [observability/dashboards.md](../observability/dashboards.md) | Деплоятся через ConfigMap из чарта `momo-store` |
+| Алерты | [observability/alerts.md](../observability/alerts.md) | Деплоятся через ConfigMap из чарта `momo-store` |
 
 ---
 
@@ -166,9 +253,10 @@ momo-store/
 | GitLab Runner | [gitlab-runner.md](../infrastructure/gitlab-runner.md) | Исполняет джобы, установлен через Terraform |
 | Container Registry | [bootstrap.md](../infrastructure/bootstrap.md) | Хранит образы, `push:*` пушит сюда |
 | Kubernetes cluster | [kubernetes-cluster.md](../infrastructure/kubernetes-cluster.md) | `deploy:staging` деплоит сюда |
-| RBAC для CI | [readme.md](../infrastructure/readme.md) → раздел «CI/CD RBAC» | `ci-deployer` — SA, под которым работает деплой |
-| Ingress-nginx | [readme.md](../infrastructure/readme.md) → раздел «Ingress-Nginx» | Устанавливается отдельно, не через CI |
-| Helm-чарт | [../helm/readme.md](../helm/readme.md) | Используется в `deploy:staging` |
+| RBAC для CI | [infrastructure/readme.md](../infrastructure/readme.md) → «CI/CD RBAC» | `ci-deployer` — SA, под которым работает деплой |
+| Ingress-nginx | [infrastructure/readme.md](../infrastructure/readme.md) → «Ingress-Nginx» | Устанавливается отдельно, не через CI |
+| Monitoring | [infrastructure/readme.md](../infrastructure/readme.md) → «Monitoring» | Устанавливается отдельно, не через CI |
+| Helm-чарт | [helm/readme.md](../helm/readme.md) | Используется в `deploy:staging` |
 
 ---
 
@@ -208,21 +296,10 @@ momo-store/
 
 ---
 
-## ⚠️ Troubleshooting
-
-Типовые ошибки и решения — в [troubleshooting.md](./troubleshooting.md). Самое частое:
-
-- `Error: unknown command "sh" for "helm"` — образ `alpine/helm` не имеет shell. Заменено на `alpine:3.20` + `apk add helm`.
-- `cannot get resource "clusterroles"` — CI не должен трогать cluster-wide. `ingress-nginx` вынесен в отдельный скрипт, ставится админом.
-- `exec: fork/exec ... yc: no such file` — kubeconfig с exec-плагином. Заменено на статический токен через `setup-ci-rbac.sh`.
-- `unauthorized: Password is invalid - must be JSON key` — переменная `YC_SA_KEY_JSON` содержит некорректный base64 или ключ от другого SA.
-
----
-
 ## 📚 Документация
 
 - [Переменные](./variables.md) — какие переменные нужны и откуда брать
 - [Диагностика](./diagnostics.md) — как запускать `diag:*`-джобы
-- [Troubleshooting](./troubleshooting.md) — частые ошибки и решения
 - [Infrastructure](../infrastructure/readme.md) — Terraform-модули
+- [Observability](../observability/readme.md) — Prometheus + Grafana, дашборды, алерты
 - [Helm-чарт](../helm/readme.md) — описание чарта `momo-store`

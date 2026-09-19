@@ -56,6 +56,14 @@ echo "🔧 Setting up ingress-nginx for $ENV"
 "$SCRIPT_DIR/setup-ingress-nginx.sh" "$ENV"
 
 # ============================================================================
+# Post-apply: установка monitoring (Prometheus + Grafana)
+# ============================================================================
+
+echo ""
+echo "🔧 Setting up monitoring for $ENV"
+"$SCRIPT_DIR/setup-monitoring.sh" "$ENV"
+
+# ============================================================================
 # Post-apply: настройка RBAC для CI
 # ============================================================================
 

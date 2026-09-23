@@ -244,11 +244,17 @@ deploy:staging:
     - chmod 600 /tmp/kubeconfig
     - export KUBECONFIG=/tmp/kubeconfig
   script:
+    # helm upgrade деплоит приложение + создаёт ресурсы для observability:
+    #   - ServiceMonitor для scrape /metrics бэкенда
+    #   - ConfigMap с дашбордами Grafana (grafana_dashboard=1)
+    #   - ConfigMap с алертами Grafana (grafana_alert=1)
+    # GRAFANA_SMTP_EMAIL передаётся в contact point gmail-alerts.
     - |
       helm upgrade -i momo-store "${HELM_CHART_DIR}" \
         -f "${HELM_CHART_DIR}/values.yaml" \
         -f "${HELM_CHART_DIR}/values-staging.yaml" \
         --set backend.image.tag="${CI_COMMIT_SHORT_SHA}" \
+        --set monitoring.alerting.email="${GRAFANA_SMTP_EMAIL}" \
         --namespace default \
         --wait --timeout 5m
     - kubectl rollout restart deployment/momo-store-frontend -n default

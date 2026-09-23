@@ -27,3 +27,6 @@ ingress:
           pathType: Prefix
           service: frontend
           port: 80
+
+monitoring:
+  enabled: true

@@ -32,6 +32,7 @@
 │ ConfigMap                     │
 │   momo-store-grafana-         │
 │   dashboards                  │
+│   namespace: default          │
 │   labels:                     │
 │     grafana_dashboard: "1"    │
 └──────────────┬────────────────┘
@@ -39,8 +40,10 @@
                ▼
 ┌───────────────────────────────┐
 │ Sidecar grafana-sc-dashboard  │
-│ (в поде Grafana)              │
+│ (в поде Grafana, namespace    │
+│  monitoring)                  │
 │                               │
+│ searchNamespace=ALL           │
 │ Записывает файлы в            │
 │ /tmp/dashboards/              │
 └──────────────┬────────────────┘
@@ -60,7 +63,9 @@
 - **Sidecar `grafana-sc-dashboard`** — контейнер рядом с Grafana. Сканирует кластер на ConfigMap с меткой, сохраняет файлы на диск Grafana.
 - **Параметр `searchNamespace=ALL`** — sidecar ищет во **всех** namespace. Иначе нашёл бы только те, что лежат в `monitoring`, а ConfigMap чарта создаётся в `default`.
 
-**Важно:** ConfigMap создаётся в namespace `default` (там, где развёрнут чарт `momo-store`), а sidecar запущен в `monitoring`. Поэтому `searchNamespace=ALL` **обязателен**.
+> **ConfigMap создаётся в namespace `default`** (там, где развёрнут чарт `momo-store`), а sidecar запущен в `monitoring`. Поэтому `searchNamespace=ALL` **обязателен**.
+>
+> **Алерты — наоборот.** `ConfigMap/momo-store-grafana-alerting` создаётся в namespace `monitoring` — потому что alerts-sidecar смотрит только в свой namespace. Это значит, что у `ci-deployer` должны быть права на `configmaps` в `monitoring`. См. [CI/CD: переменные](../ci-cd/variables.md#-kube_config_staging).
 
 ---
 
@@ -293,6 +298,7 @@ data:
 - **Один ConfigMap — три файла.** Sidecar читает каждый ключ как отдельный дашборд.
 - **Метка `grafana_dashboard: "1"`** — обязательна. Без неё sidecar не найдёт ConfigMap.
 - **Namespace** — `{{ .Release.Namespace }}` (у вас `default`). Sidecar найдёт благодаря `searchNamespace=ALL`.
+- **`monitoring.dashboard.enabled`** — флаг из `values.yaml`. Если `false`, ConfigMap не создаётся.
 
 ---
 
@@ -307,7 +313,8 @@ data:
    ```bash
    helm upgrade -i momo-store ./k8s/helm/momo-store \
      -f k8s/helm/momo-store/values.yaml \
-     -f k8s/helm/momo-store/values-staging.yaml
+     -f k8s/helm/momo-store/values-staging.yaml \
+     --set monitoring.alerting.email="${GRAFANA_SMTP_EMAIL}"
    ```
 
 4. Через 30 секунд sidecar обновит файл. Grafana перечитает его.
@@ -393,13 +400,19 @@ Writing /tmp/dashboards/momo-store-infrastructure.json (ascii)
    ```
    Должно быть `grafana_dashboard: "1"`.
 
-2. **Проверьте sidecar:**
+2. **Проверьте namespace ConfigMap:**
+   ```bash
+   kubectl get configmap -n default momo-store-grafana-dashboards
+   ```
+   ConfigMap должен быть **в `default`**, а не в `monitoring`.
+
+3. **Проверьте sidecar:**
    ```bash
    kubectl logs -n monitoring deploy/monitoring-grafana -c grafana-sc-dashboard --tail=30
    ```
    Если sidecar пишет `Skipping configmap ...` — проверьте метку и namespace.
 
-3. **Проверьте `searchNamespace=ALL`:**
+4. **Проверьте `searchNamespace=ALL`:**
    ```bash
    kubectl get deploy -n monitoring monitoring-grafana -o yaml | grep -A2 'search-namespace'
    ```
@@ -408,10 +421,19 @@ Writing /tmp/dashboards/momo-store-infrastructure.json (ascii)
    --set grafana.sidecar.dashboards.searchNamespace=ALL
    ```
 
-4. **Рестарт Grafana:**
+5. **Рестарт Grafana:**
    ```bash
    kubectl rollout restart deploy -n monitoring monitoring-grafana
    ```
+
+### Альтернатива — `verify.sh`
+
+Скрипт `infrastructure/scripts/verify.sh` проверяет, что `ConfigMap/momo-store-grafana-dashboards` создан (шаг 2). Запуск:
+
+```bash
+cd infrastructure
+./scripts/verify.sh
+```
 
 ---
 
@@ -451,7 +473,9 @@ Writing /tmp/dashboards/momo-store-infrastructure.json (ascii)
 
 ## 📚 Ссылки
 
-- [Observability: обзор](./readme.md)
-- [Алерты](./alerts.md)
+- [Observability: обзор](./readme.md) — Prometheus + Grafana, доступ, переменные
+- [Алерты](./alerts.md) — какие алерты, как настроены, как проверить
+- [Helm: architecture](../helm/architecture.md#monitoring) — namespace'ы ConfigMap'ов
+- [CI/CD: переменные](../ci-cd/variables.md#-kube_config_staging) — RBAC на `monitoring`
 - [Grafana Dashboard JSON](https://grafana.com/docs/grafana/latest/dashboards/build-dashboards/view-dashboard-json-model/) — формат JSON
 - [k8s-sidecar](https://github.com/kiwigrid/k8s-sidecar) — как работает sidecar

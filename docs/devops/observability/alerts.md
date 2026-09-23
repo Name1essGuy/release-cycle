@@ -10,6 +10,8 @@
 - Изменения, сделанные в UI, будут перезаписаны при следующем деплое.
 - Конфигурация алертов хранится в git — есть history и code review.
 
+> **`ConfigMap/momo-store-grafana-alerting` создаётся в namespace `monitoring`**, а не в namespace релиза (`default`). Это значит, что у `ci-deployer` должны быть права на создание `configmaps` в `monitoring` — иначе деплой из CI упадёт с `Forbidden`. См. [CI/CD: переменные](../ci-cd/variables.md#-kube_config_staging).
+
 ---
 
 ## 🏗 Как устроено
@@ -20,6 +22,7 @@
 │   monitoring/grafana-alerting.yaml      │
 │                                         │
 │  ConfigMap momo-store-grafana-alerting  │
+│    namespace: monitoring                │
 │    labels: grafana_alert: "1"           │
 │    data:                                │
 │      contact-points.yaml: ...           │
@@ -30,10 +33,11 @@
                    ▼
 ┌─────────────────────────────────────────┐
 │ Sidecar grafana-sc-alerts               │
-│ (контейнер рядом с Grafana)             │
+│ (контейнер рядом с Grafana,             │
+│  namespace monitoring)                  │
 │                                         │
 │ Сканирует ConfigMap с меткой            │
-│ grafana_alert=1 во всех namespace       │
+│ grafana_alert=1 в namespace monitoring  │
 │                                         │
 │ Записывает файлы в                      │
 │ /etc/grafana/provisioning/alerting/     │
@@ -59,10 +63,12 @@
 
 **Ключевые компоненты:**
 
-- **ConfigMap** `momo-store-grafana-alerting` — содержит три provisioning-файла.
+- **ConfigMap** `momo-store-grafana-alerting` — содержит три provisioning-файла, создаётся **в namespace `monitoring`**.
 - **Метка `grafana_alert: "1"`** — по ней sidecar находит ConfigMap.
 - **Sidecar `grafana-sc-alerts`** — контейнер в поде Grafana, читает ConfigMap и записывает файлы в `/etc/grafana/provisioning/alerting/`.
 - **Grafana Alerting** — вычисляет правила и шлёт email.
+
+> **Дашборды — наоборот.** `ConfigMap/momo-store-grafana-dashboards` создаётся в namespace `default`, и dashboards-sidecar ищет его с `searchNamespace=ALL`. Alerts-sidecar — только в своём namespace. См. [dashboards.md](./dashboards.md) и [Helm: architecture](../helm/architecture.md#monitoring).
 
 ---
 
@@ -70,7 +76,7 @@
 
 **Имя:** `gmail-alerts`
 **Тип:** Email
-**Адрес:** значение `GRAFANA_SMTP_EMAIL` (задаётся при `setup-monitoring.sh`)
+**Адрес:** значение `GRAFANA_SMTP_EMAIL` (задаётся при `setup-monitoring.sh` и в `deploy:staging`)
 
 ```yaml
 contactPoints:
@@ -87,6 +93,8 @@ contactPoints:
 **Где посмотреть:** Grafana → **Alerting → Contact points → gmail-alerts**.
 
 **Как проверить:** нажать **Test** — должно прийти тестовое письмо.
+
+> **Email подставляется из `monitoring.alerting.email`.** Если переменная пустая — `helm upgrade` упадёт с `monitoring.alerting.email is required`. См. [CI/CD: переменные](../ci-cd/variables.md#-grafana_smtp_email).
 
 ---
 
@@ -229,6 +237,15 @@ rate(node_network_transmit_errs_total[5m])
 **`k8s/helm/momo-store/templates/monitoring/grafana-alerting.yaml`**
 
 ```yaml
+{{- if and .Values.monitoring .Values.monitoring.enabled .Values.monitoring.alerting .Values.monitoring.alerting.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "momo-store.fullname" . }}-grafana-alerting
+  namespace: monitoring      # ← namespace мониторинга, не релиза
+  labels:
+    {{- include "momo-store.labels" . | nindent 4 }}
+    grafana_alert: "1"
 data:
   contact-points.yaml: |
     apiVersion: 1
@@ -292,7 +309,14 @@ data:
         group_interval: 5m
         repeat_interval: 4h
         routes: []
+{{- end }}
 ```
+
+**Что важно:**
+
+- **`namespace: monitoring`** — ConfigMap создаётся **не в namespace релиза**. Если поменять на `{{ .Release.Namespace }}`, alerts-sidecar его не найдёт (он не ищет во всех namespace, в отличие от dashboards-sidecar).
+- **Флаг `monitoring.alerting.enabled`** — если `false`, ConfigMap не создаётся.
+- **`monitoring.alerting.email`** — обязателен при `enabled=true`.
 
 **Структура одного алерта:**
 
@@ -469,6 +493,16 @@ Grafana → **Alerting → Contact points → gmail-alerts → Test**.
 
 Это **не проверяет** правила, только SMTP. Но полезно для быстрой диагностики.
 
+### Способ 4 — `diag:monitoring`
+
+В диагностическом пайплайне есть джоба `diag:monitoring`, которая проверяет:
+
+- CRD `monitoring.coreos.com` установлены;
+- `ConfigMap/momo-store-grafana-alerting` создан в namespace `monitoring`;
+- переменная `GRAFANA_SMTP_EMAIL` задана.
+
+Запуск — вручную, см. [CI/CD: диагностика](../ci-cd/diagnostics.md#-diagmonitoring).
+
 ---
 
 ## 🛠 Если письма не приходят
@@ -527,6 +561,10 @@ Grafana → **Alerting → Alert rules** → открыть правило → �
 
 Если там только `Normal` — условие не срабатывало. Временный алерт (Способ 2) поможет убедиться, что механизм работает.
 
+### 7. Проверить RBAC (если деплой из CI)
+
+Если `helm upgrade` из CI падает с `Forbidden: cannot get resource "configmaps" in namespace "monitoring"` — у `ci-deployer` нет прав на namespace `monitoring`. См. [CI/CD: переменные → `KUBE_CONFIG_STAGING`](../ci-cd/variables.md#-kube_config_staging).
+
 ---
 
 ## 🚫 Что не отправляется
@@ -540,10 +578,12 @@ Grafana → **Alerting → Alert rules** → открыть правило → �
 Они видны в **Alerting → Alert rules** (папка `momo-store`), но:
 
 - **Не отправляют email** — Alertmanager отключён.
-- Создаются из `PrometheusRule`, а не из Grafana provisioning.
+- Создаются из `PrometheusRule` (namespace `default`), а не из Grafana provisioning.
 - Используются только для визуального контроля в UI.
 
-Если нужно, чтобы и они отправляли письма — либо перенести их в Grafana Alerting, либо включить Alertmanager.
+Если нужно, чтобы и они отправляли письма — либо перенести их в Grafana Alerting (`grafana-alerting.yaml`), либо включить Alertmanager.
+
+> **`PrometheusRule/momo-store-alerts` создаётся в namespace `default`** (namespace релиза), в отличие от `ConfigMap/momo-store-grafana-alerting` (namespace `monitoring`). Это не опечатка — CRD namespace-scoped, и Prometheus Operator ищет их во всех namespace.
 
 ---
 
@@ -569,11 +609,27 @@ Grafana → **Alerting → Alert rules** → открыть правило → �
 
 **Обычный пароль Gmail не подойдёт.**
 
+### Как передать email в ConfigMap алертов
+
+Email передаётся **отдельно** — через `--set monitoring.alerting.email` при `helm upgrade`. Он попадает в `ConfigMap/momo-store-grafana-alerting` (namespace `monitoring`) и используется как `addresses` в contact point.
+
+В CI это делает `deploy:staging`:
+
+```yaml
+--set monitoring.alerting.email="${GRAFANA_SMTP_EMAIL}"
+```
+
+Переменная `GRAFANA_SMTP_EMAIL` задаётся в GitLab → Settings → CI/CD → Variables. См. [CI/CD: переменные](../ci-cd/variables.md#-grafana_smtp_email).
+
 ---
 
 ## 📚 Ссылки
 
-- [Observability: обзор](./readme.md)
-- [Дашборды](./dashboards.md)
+- [Observability: обзор](./readme.md) — Prometheus + Grafana, доступ, переменные
+- [Дашборды](./dashboards.md) — что показывает каждый дашборд, namespace'ы ConfigMap'ов
+- [Helm: architecture](../helm/architecture.md#monitoring) — как чарт создаёт ресурсы мониторинга
+- [Helm: deployment](../helm/deployment.md) — деплой, troubleshooting
+- [CI/CD: переменные](../ci-cd/variables.md#-grafana_smtp_email) — `GRAFANA_SMTP_EMAIL`, RBAC на `monitoring`
+- [CI/CD: диагностика](../ci-cd/diagnostics.md#-diagmonitoring) — `diag:monitoring`
 - [Grafana Alerting provisioning](https://grafana.com/docs/grafana/latest/alerting/set-up/provision-alerting-resources/file-provisioning/) — формат provisioning
 - [Gmail App Passwords](https://support.google.com/accounts/answer/185833) — как создать

@@ -12,7 +12,6 @@ data:
         listen {{ .Values.frontend.service.port }};
         server_name _;
 
-        # Резолвер - ClusterIP kube-dns из values.
         resolver {{ .Values.frontend.dnsResolver }} valid=30s ipv6=off;
 
         set $s3_host "{{ .Values.frontend.s3.endpoint }}";
@@ -20,7 +19,16 @@ data:
         set $s3_prefix "{{ .Values.frontend.s3.prefix }}";
 
         # ====================================================================
-        # 1. Корень - index.html из папки momo-store/
+        # Health check для probes — не ходит в S3, отвечает всегда
+        # ====================================================================
+        location = /healthz {
+            access_log off;
+            return 200 "ok\n";
+            add_header Content-Type text/plain;
+        }
+
+        # ====================================================================
+        # Корень — index.html из папки momo-store/
         # ====================================================================
         location = / {
             proxy_pass https://$s3_host/$s3_bucket/$s3_prefix/index.html;
@@ -29,10 +37,7 @@ data:
         }
 
         # ====================================================================
-        # 2. Статика
-        #    Браузер запрашивает: /momo-store/js/app.82cde13b.js
-        #    В S3 лежит:          momo-store/js/app.82cde13b.js
-        #    Префикс momo-store уже в $request_uri → НЕ добавляем $s3_prefix.
+        # Статика — префикс momo-store уже в $request_uri
         # ====================================================================
         location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|map)$ {
             proxy_pass https://$s3_host/$s3_bucket$request_uri;
@@ -43,8 +48,7 @@ data:
         }
 
         # ====================================================================
-        # 3. SPA-роутинг (все остальные пути)
-        #    Тоже без $s3_prefix - префикс уже в $request_uri.
+        # SPA-роутинг
         # ====================================================================
         location / {
             proxy_pass https://$s3_host/$s3_bucket$request_uri;
@@ -55,7 +59,7 @@ data:
         }
 
         # ====================================================================
-        # 4. Fallback для Vue Router
+        # Fallback для Vue Router
         # ====================================================================
         location @spa_fallback {
             proxy_pass https://$s3_host/$s3_bucket/$s3_prefix/index.html;

@@ -11,6 +11,7 @@
 - авторизацию в Container Registry;
 - доступ к S3;
 - доступ к Kubernetes-кластеру;
+- доступ к CRD `monitoring.coreos.com` и namespace `monitoring`;
 - валидность Helm-чарта.
 
 Если что-то ломается в основном пайплайне, диагностика помогает быстро локализовать: **сеть, секреты, RBAC или Dockerfile**.
@@ -97,14 +98,7 @@ stages:
   - deploy
 ```
 
-Затем в `ci/diagnostics.yml` добавить в начало:
-
-```yaml
-stages:
-  - diagnostics
-```
-
-**Не надо** — `stages` должен быть **только в основном файле**. Если добавите в оба, будет ошибка. Уберите `stages` из `diagnostics.yml`, если он там есть.
+**Важно:** `stages` объявляется **только** в `.gitlab-ci.yml`. В `ci/diagnostics.yml` блока `stages` быть **не должно** — иначе GitLab выдаст ошибку `chosen stage diagnostics does not exist`. Если он там есть — удалите.
 
 Запушить. Пайплайн запустится, `diag:*` появятся, но с правилом `when: never` по умолчанию — **не запустятся автоматически**. Нужно запустить вручную через **Run pipeline** с переменной:
 
@@ -257,6 +251,45 @@ momo-store-frontend-xxx         1/1     Running
 
 **Если упало с `Forbidden` на `nodes` или `clusterroles`:** это **правильно** — RBAC ограничен namespace `default`. Другие джобы не должны обращаться к cluster-wide ресурсам.
 
+### `diag:monitoring`
+
+**Что проверяет:** ресурсы мониторинга и права на них.
+
+**Что делает:**
+- Проверяет наличие CRD `monitoring.coreos.com` (устанавливаются вместе с `kube-prometheus-stack`).
+- Проверяет `ServiceMonitor` в namespace `default`.
+- Проверяет `ConfigMap/momo-store-grafana-alerting` в namespace `monitoring`.
+- Проверяет, что переменная `GRAFANA_SMTP_EMAIL` не пустая.
+
+**Ожидаемый результат:**
+
+```
+==> CRDs monitoring.coreos.com
+prometheusrules.monitoring.coreos.com
+servicemonitors.monitoring.coreos.com
+...
+==> ServiceMonitor in default
+momo-store-backend
+==> ConfigMap in monitoring
+momo-store-grafana-alerting
+==> GRAFANA_SMTP_EMAIL set?
+✅ set
+```
+
+**Если упало с `Forbidden` на `servicemonitors` или `prometheusrules`:** у `ci-deployer` нет прав на CRD. Добавьте в `setup-ci-rbac.sh`:
+
+```yaml
+- apiGroups: ["monitoring.coreos.com"]
+  resources: ["prometheusrules", "servicemonitors", "podmonitors"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+```
+
+и перезапустите скрипт.
+
+**Если упало с `Forbidden` на `configmaps` в namespace `monitoring`:** `ConfigMap/momo-store-grafana-alerting` создаётся в `monitoring`, а `ci-deployer` имеет `Role` только в `default`. Починка — в [variables.md → «Forbidden на configmaps в namespace monitoring»](./variables.md#-kube_config_staging).
+
+**Если `GRAFANA_SMTP_EMAIL` пустая:** задайте переменную в GitLab → Settings → CI/CD → Variables (см. [variables.md](./variables.md)).
+
 ### `diag:helm-lint`
 
 **Что проверяет:** Helm-чарт валиден.
@@ -293,13 +326,35 @@ Rendered 200 lines
 
 **Если упало:** проблема в values (например, отсутствует обязательное поле). Смотрите `helm template` локально для деталей.
 
+### `diag:helm-test`
+
+**Что проверяет:** приложение работает после деплоя — на уровне подов, без выхода наружу.
+
+**Что делает:** `helm test momo-store -n default`.
+
+**Что проверяют тестовые поды:**
+
+- `test-backend` — `GET /health` на сервисе бэкенда;
+- `test-frontend` — `GET /healthz` на nginx и что `GET /momo-store/js/app.82cde13b.js` возвращает `Content-Type: application/javascript` (а не `text/html`).
+
+**Ожидаемый результат:**
+
+```
+NAME: momo-store
+Phase: Succeeded
+```
+
+**Если `test-frontend` упал с `Content-Type: text/html`:** nginx отдаёт `index.html` вместо статики. Смотрите `templates/frontend/nginx-configmap.yaml` и `dnsResolver` в `values.yaml`.
+
+> **`diag:helm-test` требует задеплоенного чарта.** Если релиза нет — джоба упадёт. Это ожидаемо: она проверяет работающее приложение, а не инфраструктуру.
+
 ---
 
 ## 📊 Как читать результаты
 
 ### Все зелёные
 
-Инфраструктура, секреты и кластер настроены правильно. Если основной пайплайн всё равно падает — проблема в **самом пайплайне**, а не в окружении. Смотрите `troubleshooting.md`.
+Инфраструктура, секреты и кластер настроены правильно. Если основной пайплайн всё равно падает — проблема в **самом пайплайне**, а не в окружении. Смотрите [Helm: deployment и troubleshooting](../helm/deployment.md).
 
 ### Одна красная
 
@@ -312,8 +367,10 @@ Rendered 200 lines
 | `diag:registry-login` | `YC_SA_KEY_JSON`, права SA |
 | `diag:s3` | `AWS_*` ключи, права на бакет |
 | `diag:kubectl` | `KUBE_CONFIG_STAGING`, RBAC |
+| `diag:monitoring` | CRD `monitoring.coreos.com`, RBAC на namespace `monitoring`, `GRAFANA_SMTP_EMAIL` |
 | `diag:helm-lint` | шаблоны чарта |
 | `diag:helm-template` | values чарта |
+| `diag:helm-test` | приложение не задеплоено или nginx отдаёт не то |
 
 ### Несколько красных
 
@@ -326,9 +383,9 @@ Rendered 200 lines
 Если не хочется запускать пайплайн, те же проверки можно сделать на runner-ВМ:
 
 ```bash
-# Сеть
-curl -sI https://cr.yandex | head -1
-curl -sI https://storage.yandexcloud.net | head -1
+# Сеть (без pipe — иначе curl вернёт 23)
+curl -sI --max-time 5 -o /dev/null -w "%{http_code}\n" https://cr.yandex
+curl -sI --max-time 5 -o /dev/null -w "%{http_code}\n" https://storage.yandexcloud.net
 
 # Docker
 sudo docker info
@@ -343,6 +400,15 @@ aws --endpoint-url=https://storage.yandexcloud.net s3 ls s3://momo-store-fronten
 # kubectl
 echo "$KUBE_CONFIG_STAGING" | base64 -d > /tmp/kc
 KUBECONFIG=/tmp/kc kubectl get pods -n default
+
+# Monitoring
+KUBECONFIG=/tmp/kc kubectl get crd | grep monitoring.coreos.com
+KUBECONFIG=/tmp/kc kubectl get servicemonitor -n default
+KUBECONFIG=/tmp/kc kubectl get configmap -n monitoring momo-store-grafana-alerting
+test -n "$GRAFANA_SMTP_EMAIL" && echo "✅ GRAFANA_SMTP_EMAIL set" || echo "❌ empty"
+
+# helm test
+helm test momo-store -n default
 ```
 
 ---
@@ -400,11 +466,17 @@ git checkout .gitlab-ci.yml
 
 **Решение:** использовать `image: alpine:3.20` + `before_script: apk add --no-cache helm`.
 
+### `diag:helm-test` падает с `Error: release: not found`
+
+**Причина:** релиз `momo-store` не задеплоен в кластер.
+
+**Решение:** сначала задеплоить (`helm upgrade -i momo-store ...`), потом запускать `diag:helm-test`. Или исключить эту джобу из диагностики, если проверяете только инфраструктуру.
+
 ---
 
 ## 🔗 Ссылки
 
 - [Основной пайплайн](./readme.md)
-- [Переменные](./variables.md)
-- [Troubleshooting](./troubleshooting.md)
+- [Переменные](./variables.md) — `GRAFANA_SMTP_EMAIL`, `KUBE_CONFIG_STAGING`, RBAC
+- [Helm: деплой и troubleshooting](../helm/deployment.md) — что делать при провале `helm upgrade`
 - [GitLab Docs: CI/CD pipeline](https://docs.gitlab.com/ee/ci/pipelines/)

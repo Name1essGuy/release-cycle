@@ -295,6 +295,186 @@ kubectl get nodes
 terraform output -raw cluster_name
 ```
 
+Имя кластера - `<env>-managed-k8s`. Узнать точно:
+
+```bash
+terraform output -raw cluster_name
+```
+
+---
+
+## 🌐 Ingress-Nginx
+
+`ingress-nginx` - **инфраструктурный компонент**, а не часть приложения. Он создаёт cluster-wide ресурсы (`ClusterRole`, `ClusterRoleBinding`, webhook-конфигурации), которые устанавливаются **один раз на кластер** с admin-правами.
+
+### Почему отдельно от Helm-чарта `momo-store`
+
+Раньше `ingress-nginx` был зависимостью Helm-чарта `momo-store`. Это создавало проблему: CI-раннер с ограниченным RBAC (`ci-deployer`, namespace-scoped) не мог создать `ClusterRole`, и `helm upgrade` падал с:
+
+```
+clusterroles.rbac.authorization.k8s.io "momo-store-ingress-nginx" is forbidden:
+User "system:serviceaccount:default:ci-deployer"
+cannot get resource "clusterroles" in API group "rbac.authorization.k8s.io"
+at the cluster scope
+```
+
+Теперь `ingress-nginx` устанавливается отдельно админом, а `momo-store` управляет только namespace-scoped ресурсами. CI не трогает cluster-wide.
+
+### Скрипт `setup-ingress-nginx.sh`
+
+**Что делает:**
+
+1. Получает `ingress_lb_security_group_id`:
+   - Из переменной `INGRESS_LB_SG_ID`, если задана.
+   - Или из `terraform output -raw ingress_lb_security_group_id`.
+
+2. Получает админский kubeconfig:
+   ```bash
+   yc managed-kubernetes cluster get-credentials \
+       --name <env>-managed-k8s --external --force
+   ```
+
+3. Добавляет Helm-репозиторий `ingress-nginx`.
+
+4. Устанавливает/обновляет chart:
+   ```bash
+   helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+       --namespace ingress-nginx \
+       --create-namespace \
+       --version 4.11.0 \
+       --set controller.service.annotations."yandex\.cloud/load-balancer-type"=external \
+       --set controller.service.annotations."yandex\.cloud/security-group-ids"=<sg-id> \
+       --set controller.admissionWebhooks.enabled=false \
+       --wait --timeout 5m
+   ```
+
+5. Ждёт появления внешнего IP у LoadBalancer'а (до 5 минут).
+
+### Запуск вручную
+
+Если нужно установить `ingress-nginx` без `terraform apply`:
+
+```bash
+cd infrastructure
+
+# Вариант 1: скрипт сам возьмёт SG-ID из terraform output
+./scripts/setup-ingress-nginx.sh staging
+
+# Вариант 2: SG-ID передаётся явно
+export INGRESS_LB_SG_ID="<sg-id>"
+./scripts/setup-ingress-nginx.sh staging
+
+# Вариант 3: другая версия chart
+export INGRESS_NGINX_VERSION="4.10.0"
+./scripts/setup-ingress-nginx.sh staging
+```
+
+### Параметры скрипта
+
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `INGRESS_LB_SG_ID` | из `terraform output` | Security Group для LoadBalancer |
+| `INGRESS_NGINX_VERSION` | `4.11.0` | Версия Helm-чарта |
+
+### Проверка после установки
+
+```bash
+# Release установлен
+helm list -n ingress-nginx
+
+# Поды работают
+kubectl get pods -n ingress-nginx
+
+# LoadBalancer получил IP
+kubectl get svc ingress-nginx-controller -n ingress-nginx \
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+
+# Проверка
+curl -I http://<EXTERNAL-IP>/
+```
+
+### Что видит ingress-nginx
+
+- Namespace `ingress-nginx`.
+- Release `ingress-nginx`.
+- Внешний IP LoadBalancer'а - **не меняется** при деплоях `momo-store`.
+
+Ingress-объекты из `momo-store` (в namespace `default`) просто указывают `ingressClassName: nginx` - и `ingress-nginx` их подхватывает.
+
+---
+
+## 🔐 CI/CD RBAC
+
+Скрипт `setup-ci-rbac.sh` настраивает **минимально необходимые права** для GitLab CI. После его выполнения CI-раннер может деплоить приложения в namespace `default`, но **не имеет доступа** к другим namespace или к cluster-wide ресурсам.
+
+### Что создаётся
+
+| Ресурс | Назначение |
+|---|---|
+| `ServiceAccount/ci-deployer` (namespace `default`) | Идентичность CI в кластере |
+| `Role/ci-deployer` (namespace `default`) | Права на деплой приложений |
+| `RoleBinding/ci-deployer` | Связка SA ↔ Role |
+| `Secret/ci-deployer-token` | Долгоживущий токен SA |
+
+### Права Role
+
+| Группа | Ресурсы | Verbs |
+|---|---|---|
+| `""` (core) | configmaps, secrets, services, serviceaccounts, PVC | get, list, watch, create, update, patch, delete |
+| `""` (core) | pods, pods/log, pods/exec, endpoints, events, replicasets | get, list, watch |
+| `""` (core) | namespaces | get, list, watch |
+| `apps` | deployments, replicasets, statefulsets, daemonsets | полный |
+| `batch` | jobs, cronjobs | полный |
+| `networking.k8s.io` | ingresses | полный |
+| `autoscaling` | horizontalpodautoscalers | полный |
+
+**Чего нет и не должно быть:** доступа к `nodes`, `clusterroles`, `clusterrolebindings`, `persistentvolumes`, ресурсам в других namespace.
+
+### Что скрипт обновляет в GitLab
+
+Переменную `KUBE_CONFIG_STAGING` (или `KUBE_CONFIG_PROD`). Она содержит **base64 от kubeconfig** с долгоживущим токеном. В CI деплой-джоба декодирует её и использует для `kubectl` / `helm`.
+
+Токен **не истекает**, пока существует Secret `ci-deployer-token`. Не нужно регулярно перевыпускать.
+
+### Запуск вручную
+
+Если нужно настроить RBAC без `terraform apply` (например, после пересоздания кластера или для отладки):
+
+```bash
+cd infrastructure
+export GITLAB_TOKEN="<gitlab_api_access_token>"
+export GITLAB_PROJECT_ID="<gitlab_project_id>"
+export GITLAB_URL="<gitlab_instance_url>"
+
+./scripts/setup-ci-rbac.sh staging
+```
+
+Скрипт идемпотентен - повторный запуск не сломает существующие ресурсы (`kubectl apply` перезапишет их тем же содержимым).
+
+### Проверка после настройки
+
+```bash
+# В кластере
+kubectl get sa,role,rolebinding,secret -n default | grep ci-deployer
+
+# Kubeconfig работает
+KUBECONFIG=/tmp/kubeconfig-ci kubectl get pods -n default
+
+# RBAC ограничен
+KUBECONFIG=/tmp/kubeconfig-ci kubectl get nodes
+# Ожидаем: Forbidden - прав на nodes нет
+```
+
+### Если GitLab API возвращает 403
+
+Скрипт не смог обновить переменную. Причины:
+
+1. **`GITLAB_TOKEN` без scope `api`.** Проверьте в GitLab → User Settings → Access Tokens.
+2. **Роль в проекте ниже Maintainer.** Проверьте в GitLab → проект → Members.
+3. **Переменная защищена (Protected), а ветка не protected.** В скрипте стоит `protected=false` при создании, но при обновлении - флаг не меняется. Проверьте вручную в Settings → CI/CD → Variables.
+
+Если 403 всё равно - скрипт **выведет base64 kubeconfig**. Скопируйте его вручную в переменную GitLab.
+
 ---
 
 ## 🌐 Ingress-Nginx

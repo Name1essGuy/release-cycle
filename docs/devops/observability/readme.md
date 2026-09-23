@@ -14,6 +14,8 @@ Prometheus Operator управляет жизненным циклом Prometheu
 
 Устанавливается **автоматически** через скрипт `infrastructure/scripts/setup-monitoring.sh`, который вызывается из `apply.sh` после `setup-ingress-nginx.sh`.
 
+> **Ресурсы мониторинга создаёт чарт `momo-store`** — `ServiceMonitor`, `ConfigMap` с дашбордами и алертами. Стек `kube-prometheus-stack` их только подхватывает. Подробнее — в [Helm: architecture](../helm/architecture.md#monitoring).
+
 ---
 
 ## 🏗 Архитектура
@@ -62,16 +64,26 @@ Grafana доступна снаружи по `http://<EXTERNAL-IP>/monitoring`.
 ```
 infrastructure/
 └── scripts/
-    └── setup-monitoring.sh       # установка стека (вызывается из apply.sh)
+    ├── setup-monitoring.sh       # установка стека (вызывается из apply.sh)
+    └── verify.sh                 # end-to-end проверка после деплоя
 
 k8s/helm/momo-store/
 └── templates/
     └── monitoring/
         ├── servicemonitor.yaml       # Prometheus scrape /metrics бэкенда
-        ├── grafana-dashboards.yaml   # ConfigMap с дашбордами
-        ├── grafana-alerting.yaml     # ConfigMap с алертами + contact point
-        └── prometheusrule.yaml       # CRD с алертами для Grafana (legacy)
+        ├── grafana-dashboards.yaml   # ConfigMap с дашбордами (namespace default)
+        ├── grafana-alerting.yaml     # ConfigMap с алертами (namespace monitoring)
+        └── prometheusrule.yaml       # CRD с алертами для UI Grafana (legacy)
 ```
+
+> **Namespace'ы ConfigMap'ов различаются:**
+>
+> | ConfigMap | Namespace | Почему |
+> |---|---|---|
+> | `momo-store-grafana-dashboards` | `default` | dashboards-sidecar с `searchNamespace=ALL` |
+> | `momo-store-grafana-alerting` | `monitoring` | alerts-sidecar смотрит только в свой namespace |
+>
+> Это значит, что у `ci-deployer` должны быть права на `configmaps` в `monitoring` — иначе деплой из CI упадёт с `Forbidden`. См. [CI/CD: переменные](../ci-cd/variables.md#-kube_config_staging).
 
 ---
 
@@ -82,7 +94,7 @@ k8s/helm/momo-store/
 1. Terraform создаёт кластер и networking.
 2. `setup-ingress-nginx.sh` ставит ingress-nginx.
 3. **`setup-monitoring.sh`** ставит `kube-prometheus-stack`.
-4. `setup-ci-rbac.sh` настраивает RBAC для CI.
+4. `setup-ci-rbac.sh` настраивает RBAC для CI (включая namespace `monitoring`).
 
 ### Ручной запуск
 
@@ -105,6 +117,8 @@ export GRAFANA_SMTP_PASSWORD="xxxx xxxx xxxx xxxx"   # App Password Gmail
 | `GRAFANA_SMTP_PASSWORD` | ✅ | App Password Gmail (16 символов, без пробелов) |
 | `MONITORING_NAMESPACE` | ❌ | Namespace, по умолчанию `monitoring` |
 | `KUBE_PROM_STACK_VERSION` | ❌ | Версия Helm-чарта, по умолчанию `65.5.1` |
+
+> **`GRAFANA_SMTP_EMAIL` также нужна в GitLab CI** — передаётся в `deploy:staging` как `--set monitoring.alerting.email`. Без неё `helm upgrade` упадёт при `monitoring.alerting.enabled=true`. См. [CI/CD: переменные](../ci-cd/variables.md#-grafana_smtp_email).
 
 ### Как получить Gmail App Password
 
@@ -135,6 +149,7 @@ Prometheus скрейпит:
 | `kube-proxy` | Метрики kube-proxy (в Managed K8s часто `DOWN` — это нормально) |
 | `grafana` | Метрики самой Grafana |
 | `prometheus-operator` | Метрики оператора |
+| `ingress-nginx` | Метрики ingress-controller (ServiceMonitor с меткой `release=monitoring`) |
 
 ### Retention
 
@@ -216,9 +231,68 @@ serve_from_sub_path = true
 - **Notification policy:** default → `gmail-alerts`.
 - **Group wait:** 30s, **group interval:** 5m, **repeat interval:** 4h.
 
-Алерты деплоятся через `ConfigMap` `momo-store-grafana-alerting` с меткой `grafana_alert: "1"`.
+Алерты деплоятся через `ConfigMap` `momo-store-grafana-alerting` с меткой `grafana_alert: "1"` **в namespace `monitoring`**.
 
 Подробнее — [alerts.md](./alerts.md).
+
+### `PrometheusRule` — legacy
+
+В чарте также есть `PrometheusRule/momo-store-alerts` (CRD от Prometheus Operator). Он создаётся в namespace `default` и содержит три правила:
+
+- `MomoStoreHighLatencyP95`
+- `MomoStoreBackendDown`
+- `MomoStoreHighCpu`
+
+Эти правила видны в **Grafana → Alerting → Alert rules** (папка `momo-store`), но **не отправляют email** — Alertmanager отключён. Они используются только для визуального контроля в UI.
+
+Если нужно, чтобы и они отправляли письма — перенесите их в `grafana-alerting.yaml` (в формат Grafana Alerting). Подробнее — в [alerts.md → «Что не отправляется»](./alerts.md#-что-не-отправляется).
+
+---
+
+## ✅ Проверка после деплоя
+
+### 1. `verify.sh`
+
+End-to-end проверка через EXTERNAL-IP:
+
+```bash
+cd infrastructure
+./scripts/verify.sh
+```
+
+Проверяет:
+
+- Поды backend и frontend `Ready`.
+- ServiceMonitor и ConfigMap дашбордов созданы.
+- Сайт открывается по `EXTERNAL-IP`.
+- Статика проксируется как JS.
+- `/api/products` возвращает JSON.
+
+### 2. Метрики собираются
+
+```bash
+kubectl port-forward -n monitoring svc/monitoring-kube-prometheus-prometheus 9090:9090
+# → http://localhost:9090/targets
+```
+
+Ищите `serviceMonitor/default/momo-store-backend/0` — должен быть `UP`.
+
+### 3. Дашборды загружены
+
+```bash
+kubectl get configmap -n default momo-store-grafana-dashboards
+kubectl logs -n monitoring deploy/monitoring-grafana -c grafana-sc-dashboard --tail=20
+```
+
+Ищите строки `Writing /tmp/dashboards/momo-store-*.json`.
+
+### 4. Алерты активны
+
+```bash
+kubectl get configmap -n monitoring momo-store-grafana-alerting
+```
+
+В Grafana → **Alerting → Alert rules** → папка `Infrastructure` → группа `node-health`. Должны быть четыре правила в статусе `Normal`.
 
 ---
 
@@ -295,6 +369,22 @@ kubectl delete pod -n monitoring prometheus-monitoring-kube-prometheus-prometheu
 - **Аутентификация** — только admin-пароль, RBAC внутри Grafana не настроен.
 - SMTP идёт через **Gmail** с App Password (не основной пароль аккаунта).
 
+### RBAC для CI
+
+Деплой чарта `momo-store` из CI требует у `ci-deployer` прав на:
+
+- `servicemonitors`, `prometheusrules`, `podmonitors` в namespace `default` — группа `monitoring.coreos.com`;
+- `configmaps` в namespace `monitoring` — для ConfigMap алертов.
+
+Проверить:
+
+```bash
+KUBECONFIG=/tmp/kubeconfig-ci kubectl auth can-i create servicemonitors -n default
+KUBECONFIG=/tmp/kubeconfig-ci kubectl auth can-i create configmaps -n monitoring
+```
+
+Оба должны вернуть `yes`. Если нет — см. [CI/CD: переменные](../ci-cd/variables.md#-kube_config_staging).
+
 ---
 
 ## 🧹 Удаление
@@ -314,6 +404,10 @@ kubectl delete namespace monitoring
   kubectl get crd | grep monitoring.coreos.com
   kubectl delete crd <name>
   ```
+- `PrometheusRule/momo-store-alerts` в namespace `default` — создаётся чартом `momo-store`, а не `kube-prometheus-stack`. Удалится при `helm uninstall momo-store`, если Helm успел удалить CRD. Если CRD уже нет — удалите вручную:
+  ```bash
+  kubectl delete prometheusrule momo-store-alerts -n default --ignore-not-found
+  ```
 
 ---
 
@@ -321,6 +415,9 @@ kubectl delete namespace monitoring
 
 - [Дашборды](./dashboards.md) — что показывает каждый дашборд
 - [Алерты](./alerts.md) — какие алерты, как настроены, как проверить
-- [CI/CD](../ci-cd/readme.md) — как пайплайн связан с мониторингом
+- [Helm: architecture](../helm/architecture.md) — как чарт `momo-store` создаёт ресурсы мониторинга
+- [Helm: deployment](../helm/deployment.md) — деплой, troubleshooting
+- [CI/CD: переменные](../ci-cd/variables.md) — `GRAFANA_SMTP_EMAIL`, RBAC на `monitoring`
+- [CI/CD: диагностика](../ci-cd/diagnostics.md) — `diag:monitoring`
 - [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) — официальный чарт
 - [Grafana Alerting Provisioning](https://grafana.com/docs/grafana/latest/alerting/set-up/provision-alerting-resources/file-provisioning/) — документация по provisioning

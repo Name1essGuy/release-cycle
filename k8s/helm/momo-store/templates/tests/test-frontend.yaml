@@ -1,0 +1,49 @@
+{{- if .Values.frontend.enabled }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "momo-store.fullname" . }}-test-frontend
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "momo-store.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  containers:
+    - name: test-frontend
+      image: curlimages/curl:8.10.1
+      command:
+        - sh
+        - -c
+        - |
+          set -e
+          BASE="http://{{ include "momo-store.fullname" . }}-frontend:{{ .Values.frontend.service.port }}"
+
+          # 1. Health check nginx
+          echo "Testing frontend $BASE/healthz..."
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$BASE/healthz")
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ /healthz returned $HTTP_CODE (expected 200)"
+            exit 1
+          fi
+          echo "✅ /healthz — 200"
+
+          # 2. Проверка, что статика проксируется в S3 как JS (не HTML)
+          #    Берём известный файл из бакета
+          JS_PATH="/momo-store/js/app.82cde13b.js"
+          echo "Testing static proxy: $BASE$JS_PATH"
+          CT=$(curl -s -o /dev/null -w "%{content_type}" --max-time 10 "$BASE$JS_PATH")
+          echo "Content-Type: $CT"
+          case "$CT" in
+            *javascript*|*ecmascript*)
+              echo "✅ Static is proxied as JavaScript"
+              ;;
+            *)
+              echo "❌ Static returned as '$CT' (expected JavaScript)."
+              echo "   Likely nginx returns index.html instead of JS — check proxy_pass."
+              exit 1
+              ;;
+          esac
+{{- end }}

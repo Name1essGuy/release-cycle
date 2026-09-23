@@ -14,6 +14,8 @@
 
 Разделение важно: `ingress-nginx` и `monitoring` создают cluster-wide ресурсы (`ClusterRole`, `ClusterRoleBinding`, webhook-конфигурации), которые не должен уметь создавать CI. CI деплоит **только приложение** — `Deployment`, `Service`, `Ingress`, `ConfigMap` — в namespace `default`.
 
+> **После деплоя** можно проверить работоспособность скриптом `scripts/verify.sh` — он делает end-to-end проверку через EXTERNAL-IP (см. [«Проверка после деплоя»](#-проверка-после-деплоя)).
+
 ---
 
 ## 🏗 Архитектура
@@ -54,27 +56,28 @@
 │  │   │  │ kube-proxy    │  │ kube-proxy    │  │ kube-proxy │   │          │  │
 │  │   │  └───────────────┘  └───────────────┘  └────────────┘   │          │  │
 │  │   │                                                         │          │  │
-│  │   │  ┌────────────────────────────────────────┐             │          │  │
-│  │   │  │ Ingress-Nginx (namespace ingress-nginx)│             │          │  │
-│  │   │  │  • Controller + LoadBalancer           │             │          │  │
-│  │   │  │  • ClusterRole, ClusterRoleBinding     │             │          │  │
-│  │   │  │  • Устанавливается один раз cluster-admin           │          │  │
-│  │   │  └────────────────────────────────────────┘             │          │  │
+│  │   │  ┌──────────────────────────────────────────┐           │          │  │
+│  │   │  │ Ingress-Nginx (namespace ingress-nginx)  │           │          │  │
+│  │   │  │  • Controller + LoadBalancer             │           │          │  │
+│  │   │  │  • ClusterRole, ClusterRoleBinding       │           │          │  │
+│  │   │  │  • Устанавливается один раз cluster-admin│           │          │  │
+│  │   │  └──────────────────────────────────────────┘           │          │  │
 │  │   │                                                         │          │  │
-│  │   │  ┌────────────────────────────────────────┐             │          │  │
-│  │   │  │ Monitoring (namespace monitoring)      │             │          │  │
-│  │   │  │  • Prometheus + Grafana                │             │          │  │
-│  │   │  │  • node-exporter, kube-state-metrics   │             │          │  │
-│  │   │  │  • Grafana под /monitoring             │             │          │  │
-│  │   │  │  • SMTP для алертов                    │             │          │  │
-│  │   │  └────────────────────────────────────────┘             │          │  │
+│  │   │  ┌──────────────────────────────────────────┐           │          │  │
+│  │   │  │ Monitoring (namespace monitoring)        │           │          │  │
+│  │   │  │  • Prometheus + Grafana                  │           │          │  │
+│  │   │  │  • node-exporter, kube-state-metrics     │           │          │  │
+│  │   │  │  • Grafana под /monitoring               │           │          │  │
+│  │   │  │  • SMTP для алертов                      │           │          │  │
+│  │   │  └──────────────────────────────────────────┘           │          │  │
 │  │   │                                                         │          │  │
-│  │   │  ┌────────────────────────────────────────┐             │          │  │
-│  │   │  │ CI/CD RBAC                             │             │          │  │
-│  │   │  │  • ServiceAccount: ci-deployer         │             │          │  │
-│  │   │  │  • Role + RoleBinding (namespace default)            │          │  │
-│  │   │  │  • Secret: ci-deployer-token           │             │          │  │
-│  │   │  └────────────────────────────────────────┘             │          │  │
+│  │   │  ┌──────────────────────────────────────────┐           │          │  │
+│  │   │  │ CI/CD RBAC                               │           │          │  │
+│  │   │  │  • ServiceAccount: ci-deployer           │           │          │  │
+│  │   │  │  • Role + RoleBinding (namespace default)│           │          │  │
+│  │   │  │  • RoleBinding в namespace monitoring    │           │          │  │
+│  │   │  │  • Secret: ci-deployer-token             │           │          │  │
+│  │   │  └──────────────────────────────────────────┘           │          │  │
 │  │   └─────────────────────────────────────────────────────────┘          │  │
 │  │                                                                        │  │
 │  │   ┌─────────────────────────────────────────────────────────┐          │  │
@@ -138,7 +141,8 @@ infrastructure/
 │   ├── apply.sh                     # Terraform apply + 3 post-apply скрипта
 │   ├── setup-ingress-nginx.sh       # Установка ingress-nginx (cluster-admin)
 │   ├── setup-monitoring.sh          # Установка kube-prometheus-stack
-│   └── setup-ci-rbac.sh             # Настройка RBAC для GitLab CI
+│   ├── setup-ci-rbac.sh             # Настройка RBAC для GitLab CI
+│   └── verify.sh                    # End-to-end проверка после деплоя
 │
 ├── .gitignore
 ├── backend.tf                       # S3 backend для state
@@ -274,6 +278,7 @@ cp environments/staging/terraform.tfvars.example environments/staging/terraform.
 
 4. **`setup-ci-rbac.sh`** — настраивает RBAC для CI:
    - Создаёт `ServiceAccount`, `Role`, `RoleBinding` в namespace `default`.
+   - Создаёт `RoleBinding` в namespace `monitoring` — чтобы CI мог создавать `ConfigMap/momo-store-grafana-alerting` (см. ниже).
    - Создаёт долгоживущий токен через `Secret`.
    - Собирает kubeconfig с токеном.
    - Обновляет переменную `KUBE_CONFIG_<ENV>` в GitLab через API.
@@ -446,6 +451,8 @@ Ingress-объекты из `momo-store` (в namespace `default`) указыва
 
 Уведомления идут на Gmail через contact point `gmail-alerts`.
 
+> **`ConfigMap/momo-store-grafana-alerting` создаётся в namespace `monitoring`**, а не в namespace релиза (`default`). Это значит, что у `ci-deployer` должны быть права на создание ConfigMap в `monitoring` — иначе деплой из CI упадёт с `Forbidden`. См. ниже.
+
 📖 Подробнее: [alerts.md](../observability/alerts.md)
 
 ### Переменные окружения
@@ -457,6 +464,8 @@ Ingress-объекты из `momo-store` (в namespace `default`) указыва
 | `GRAFANA_SMTP_PASSWORD` | ✅ | App Password Gmail (16 символов) |
 | `MONITORING_NAMESPACE` | ❌ | Namespace (по умолчанию `monitoring`) |
 | `KUBE_PROM_STACK_VERSION` | ❌ | Версия чарта (по умолчанию `65.5.1`) |
+
+> **`GRAFANA_SMTP_EMAIL` также нужна в GitLab CI** для `deploy:staging` — передаётся как `--set monitoring.alerting.email`. См. [CI/CD: переменные](../ci-cd/variables.md#-grafana_smtp_email).
 
 ### Удаление
 
@@ -473,18 +482,21 @@ CRD `*.monitoring.coreos.com` остаются — они cluster-wide. Удал
 
 ## 🔐 CI/CD RBAC
 
-Скрипт `setup-ci-rbac.sh` настраивает **минимально необходимые права** для GitLab CI. После его выполнения CI-раннер может деплоить приложения в namespace `default`, но **не имеет доступа** к другим namespace или к cluster-wide ресурсам.
+Скрипт `setup-ci-rbac.sh` настраивает **минимально необходимые права** для GitLab CI. После его выполнения CI-раннер может деплоить приложения в namespace `default`, но **не имеет доступа** к другим namespace или к cluster-wide ресурсам — кроме тех, что явно разрешены.
 
 ### Что создаётся
 
-| Ресурс | Назначение |
-|---|---|
-| `ServiceAccount/ci-deployer` (namespace `default`) | Идентичность CI в кластере |
-| `Role/ci-deployer` (namespace `default`) | Права на деплой приложений |
-| `RoleBinding/ci-deployer` | Связка SA ↔ Role |
-| `Secret/ci-deployer-token` | Долгоживущий токен SA |
+| Ресурс | Namespace | Назначение |
+|---|---|---|
+| `ServiceAccount/ci-deployer` | `default` | Идентичность CI в кластере |
+| `Role/ci-deployer` | `default` | Права на деплой приложений |
+| `RoleBinding/ci-deployer` | `default` | Связка SA ↔ Role |
+| `RoleBinding/ci-deployer-monitoring` | `monitoring` | Права на `ConfigMap/momo-store-grafana-alerting` |
+| `Secret/ci-deployer-token` | `default` | Долгоживущий токен SA |
 
-### Права Role
+> **Зачем `RoleBinding` в `monitoring`.** Чарт `momo-store` создаёт `ConfigMap/momo-store-grafana-alerting` **в namespace `monitoring`** (там его ищет alerts-sidecar Grafana). Без `RoleBinding` в `monitoring` деплой из CI падает с `Forbidden: cannot get resource "configmaps" in namespace "monitoring"`. Подробнее — в [CI/CD: переменные](../ci-cd/variables.md#-kube_config_staging).
+
+### Права Role в namespace `default`
 
 | Группа | Ресурсы | Verbs |
 |---|---|---|
@@ -495,8 +507,11 @@ CRD `*.monitoring.coreos.com` остаются — они cluster-wide. Удал
 | `batch` | jobs, cronjobs | полный |
 | `networking.k8s.io` | ingresses | полный |
 | `autoscaling` | horizontalpodautoscalers | полный |
+| `monitoring.coreos.com` | prometheusrules, servicemonitors, podmonitors | полный |
 
-**Чего нет:** доступа к `nodes`, `clusterroles`, `clusterrolebindings`, `persistentvolumes`, другим namespace.
+**Чего нет:** доступа к `nodes`, `clusterroles`, `clusterrolebindings`, `persistentvolumes`, другим namespace (кроме `monitoring` для configmaps).
+
+> **`monitoring.coreos.com`** — CRD от `kube-prometheus-stack`. Без прав на них `helm upgrade` упадёт на создании `ServiceMonitor/momo-store-backend` и `PrometheusRule/momo-store-alerts`. Права namespace-scoped — `Role` в `default` достаточно.
 
 ### Что скрипт обновляет в GitLab
 
@@ -522,6 +537,7 @@ export GITLAB_URL="<gitlab_instance_url>"
 ```bash
 # В кластере
 kubectl get sa,role,rolebinding,secret -n default | grep ci-deployer
+kubectl get rolebinding -n monitoring | grep ci-deployer
 
 # Kubeconfig работает
 KUBECONFIG=/tmp/kubeconfig-ci kubectl get pods -n default
@@ -529,6 +545,14 @@ KUBECONFIG=/tmp/kubeconfig-ci kubectl get pods -n default
 # RBAC ограничен
 KUBECONFIG=/tmp/kubeconfig-ci kubectl get nodes
 # Ожидаем: Forbidden — прав на nodes нет
+
+# Права на CRD monitoring
+KUBECONFIG=/tmp/kubeconfig-ci kubectl auth can-i create servicemonitors -n default
+# Ожидаем: yes
+
+# Права на ConfigMap в monitoring
+KUBECONFIG=/tmp/kubeconfig-ci kubectl auth can-i create configmaps -n monitoring
+# Ожидаем: yes
 ```
 
 ### Если GitLab API возвращает 403
@@ -538,6 +562,50 @@ KUBECONFIG=/tmp/kubeconfig-ci kubectl get nodes
 3. **Переменная защищена (Protected), а ветка не protected.** В скрипте стоит `protected=false` при создании.
 
 Если 403 всё равно — скрипт выведет base64 kubeconfig. Скопируйте его вручную в переменную GitLab.
+
+---
+
+## ✅ Проверка после деплоя
+
+Скрипт `scripts/verify.sh` делает end-to-end проверку приложения после деплоя.
+
+```bash
+cd infrastructure
+./scripts/verify.sh
+```
+
+**Что проверяет:**
+
+| Шаг | Что |
+|---|---|
+| 1 | Поды `backend` и `frontend` в `Running` |
+| 2 | `ServiceMonitor/momo-store-backend` и `ConfigMap/momo-store-grafana-dashboards` созданы |
+| 3 | `GET /` через EXTERNAL-IP ingress-nginx → 200 |
+| 4 | `GET /momo-store/js/...` → `Content-Type: application/javascript` |
+| 5 | `GET /api/products` → JSON с полем `results` |
+
+**Переменные окружения:**
+
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `NAMESPACE` | `default` | Namespace релиза |
+| `MONITORING_NAMESPACE` | `monitoring` | Namespace мониторинга |
+| `INGRESS_NAMESPACE` | `ingress-nginx` | Namespace ingress-nginx |
+| `RELEASE_NAME` | `momo-store` | Имя Helm-релиза |
+
+**Если падает:**
+
+- На шаге 3 — `momo-store` не задеплоен или Ingress не подхватился.
+- На шаге 4 — nginx отдаёт `index.html` вместо JS. Смотрите `templates/frontend/nginx-configmap.yaml` и `dnsResolver`.
+- На шаге 5 — backend не отвечает на `/api/products`. Смотрите логи пода.
+
+**Альтернатива через Helm:**
+
+```bash
+helm test momo-store -n default
+```
+
+Проверяет `/health` бэкенда и `/healthz` фронтенда. Подробнее — в [Helm: проверки работоспособности](../helm/readme.md#-проверки-работоспособности).
 
 ---
 
@@ -583,6 +651,7 @@ terraform workspace new prod
 | `./scripts/setup-ingress-nginx.sh staging` | Только ingress-nginx |
 | `./scripts/setup-monitoring.sh staging` | Только monitoring |
 | `./scripts/setup-ci-rbac.sh staging` | Только RBAC |
+| `./scripts/verify.sh` | End-to-end проверка приложения |
 | `terraform plan` | Просмотр планируемых изменений |
 | `terraform apply` | Применение изменений |
 | `terraform destroy` | Удаление инфраструктуры |
@@ -640,9 +709,11 @@ terraform output -raw gitlab_runner_ip
 - [Networking](./networking.md) — VPC, подсети, NAT, security groups
 - [Kubernetes Cluster](./kubernetes-cluster.md) — managed K8s
 - [GitLab Runner](./gitlab-runner.md) — установка раннера
-- [CI/CD](../ci-cd/readme.md) — пайплайн, переменные, диагностика
+- [CI/CD: пайплайн](../ci-cd/readme.md) — стадии, semver-релизы, откат
+- [CI/CD: переменные](../ci-cd/variables.md) — `GRAFANA_SMTP_EMAIL`, `KUBE_CONFIG_STAGING`, RBAC
+- [CI/CD: диагностика](../ci-cd/diagnostics.md) — `diag:*`-джобы, в том числе `diag:monitoring`
 - [Observability](../observability/readme.md) — Prometheus + Grafana, дашборды, алерты
-- [Helm-чарт momo-store](../helm/readme.md) — деплой приложения
+- [Helm-чарт momo-store](../helm/readme.md) — деплой приложения, проверки, troubleshooting
 
 ### Внешние ресурсы
 

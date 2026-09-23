@@ -13,10 +13,13 @@
 | `AWS_SECRET_ACCESS_KEY` | Variable | ✅ | ❌ | `terraform output -raw secret_key` из bootstrap |
 | `S3_BUCKET` | Variable | ❌ | ❌ | `momo-store-frontend` |
 | `KUBE_CONFIG_STAGING` | Variable | ✅ | ❌ | Создаётся `setup-ci-rbac.sh` |
+| `GRAFANA_SMTP_EMAIL` | Variable | ❌ | ❌ | Gmail-адрес для алертов |
 
 > **Почему `Protected = false`.** Флаг `Protected` означает, что переменная доступна **только** в защищённых ветках (обычно `main`). У нас деплой запускается и из `ci/*` — а эти ветки не protected. Если поставить `Protected = true`, пайплайн на `ci/*` не получит переменные и упадёт. **Снимаем `Protected` со всех переменных**, пока работаем с `ci/*`. Когда перейдёте только на `main` — можно включить.
 
 > **Почему `Masked` не работает для `YC_SA_KEY_JSON`, если он в JSON-форме.** GitLab не даёт включить Masked для значений с пробелами и переносами строк. Поэтому мы кодируем JSON в **base64** — получается одна строка без пробелов. Тогда Masked работает.
+
+> **`GRAFANA_SMTP_EMAIL` обязательна только при `monitoring.alerting.enabled=true`** (по умолчанию — `true`). Если отключить `monitoring` в `values.yaml`, переменную можно не задавать. Но в боевом окружении её лучше иметь — иначе алерты уйдут в никуда.
 
 ---
 
@@ -160,6 +163,44 @@ docker run --rm \
 
 ---
 
+## 📧 `GRAFANA_SMTP_EMAIL`
+
+**Назначение:** email для contact point `gmail-alerts` в Grafana и для `from_address` в SMTP.
+
+**Формат:** обычная строка — Gmail-адрес.
+
+**Masked:** не нужен — это не секрет, а публичный адрес.
+
+**Когда обязательна:** только при `monitoring.alerting.enabled=true` (по умолчанию — `true`). Если отключить `monitoring` в `values.yaml`, переменную можно не задавать.
+
+**Где используется:**
+
+- В `deploy:staging` — передаётся как `--set monitoring.alerting.email`.
+- В `setup-monitoring.sh` — передаётся как `--set grafana.grafana.ini.smtp.user` и `from_address`.
+
+**Как получить:** ваш собственный Gmail-адрес.
+
+**Проверка:**
+
+```bash
+kubectl get configmap -n monitoring momo-store-grafana-alerting \
+  -o jsonpath='{.data.contact-points\.yaml}' | grep addresses
+# Должен вернуть реальный email, не placeholder
+```
+
+**Что делать, если `deploy:staging` падает с `monitoring.alerting.email is required`:**
+
+1. Проверить, что переменная задана в GitLab:
+   ```bash
+   curl -s --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+     "https://praktikum.gitlab.yandexcloud.net/api/v4/projects/${GITLAB_PROJECT_ID}/variables/GRAFANA_SMTP_EMAIL" \
+     | jq '.key, .value'
+   ```
+2. Проверить, что она **не Masked** (для email Masked не имеет смысла).
+3. Проверить, что в `.gitlab-ci.yml` в `deploy:staging` есть `--set monitoring.alerting.email="${GRAFANA_SMTP_EMAIL}"`.
+
+---
+
 ## ☸️ `KUBE_CONFIG_STAGING`
 
 **Назначение:** доступ к Kubernetes-кластеру для `helm upgrade` и `kubectl rollout`.
@@ -259,7 +300,32 @@ KUBECONFIG=/tmp/check-kubeconfig kubectl get nodes
 kubectl get role,rolebinding -n default | grep ci-deployer
 ```
 
-**`Forbidden` на clusterroles или nodes** — это **правильно**. RBAC ограничен namespace `default`. Если какая-то джоба пытается трогать cluster-wide ресурсы — это неправильно, надо убрать.
+**`Forbidden` на `prometheusrules` или `servicemonitors`** — `Role` не содержит права на CRD `monitoring.coreos.com`. Добавьте в `setup-ci-rbac.sh`:
+```yaml
+- apiGroups: ["monitoring.coreos.com"]
+  resources: ["prometheusrules", "servicemonitors", "podmonitors"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+```
+и перезапустите скрипт.
+
+**`Forbidden` на `configmaps` в namespace `monitoring`** — `ConfigMap/momo-store-grafana-alerting` создаётся **не** в namespace релиза (`default`), а в `monitoring` (там, где sidecar Grafana). У `ci-deployer` есть `Role` только в `default` — прав на `monitoring` нет.
+
+Два способа починить:
+
+**Способ А** — выдать `ci-deployer` права в namespace `monitoring`:
+
+```bash
+kubectl create rolebinding ci-deployer-monitoring \
+  --clusterrole=edit \
+  --serviceaccount=default:ci-deployer \
+  -n monitoring
+```
+
+**Способ Б** — создавать ConfigMap в namespace релиза (`default`). В `templates/monitoring/grafana-alerting.yaml` заменить `namespace: monitoring` на `namespace: {{ .Release.Namespace }}`. Тогда sidecar Grafana должен искать ConfigMap во всех namespace (`searchNamespace=ALL`).
+
+Способ А — быстрее и не трогает чарт. Способ Б — чище архитектурно, но требует настройки sidecar'а.
+
+**`Forbidden` на `clusterroles` или `nodes`** — это **правильно**. RBAC ограничен namespace `default`. Если какая-то джоба пытается трогать cluster-wide ресурсы — это неправильно, надо убрать.
 
 ---
 
@@ -272,6 +338,25 @@ kubectl get role,rolebinding -n default | grep ci-deployer
 | `AWS_SECRET_ACCESS_KEY` | Variable | ✅ | ❌ | bootstrap → `secret_key` |
 | `S3_BUCKET` | Variable | ❌ | ❌ | `momo-store-frontend` |
 | `KUBE_CONFIG_STAGING` | Variable | ✅ | ❌ | `setup-ci-rbac.sh` |
+| `GRAFANA_SMTP_EMAIL` | Variable | ❌ | ❌ | ваш Gmail |
+
+---
+
+## 🔖 Встроенные переменные GitLab
+
+Эти переменные GitLab задаёт автоматически — их **не надо** добавлять в Settings.
+
+| Переменная | Когда заполнена | Что содержит |
+|---|---|---|
+| `CI_COMMIT_SHORT_SHA` | всегда | Короткий SHA коммита (8 символов) |
+| `CI_COMMIT_BRANCH` | push в ветку | Имя ветки (`main`, `ci/...`, `feature/...`) |
+| `CI_COMMIT_TAG` | push git-тега | Имя тега (`v1.2.3`) — **пусто** при push в ветку |
+
+В `push:*` и `deploy:*` используются **все три**:
+
+- `$CI_COMMIT_BRANCH` — для выбора ветки.
+- `$CI_COMMIT_TAG` — для определения, что это релиз.
+- `$CI_COMMIT_SHORT_SHA` — для Docker-тега в обычном push.
 
 ---
 
@@ -319,6 +404,7 @@ AWS_ACCESS_KEY_ID       masked=true     protected=false
 AWS_SECRET_ACCESS_KEY   masked=true     protected=false
 S3_BUCKET               masked=false    protected=false
 KUBE_CONFIG_STAGING     masked=true     protected=false
+GRAFANA_SMTP_EMAIL      masked=false    protected=false
 ```
 
 ---
@@ -335,7 +421,8 @@ KUBE_CONFIG_STAGING     masked=true     protected=false
 ## 🔗 Ссылки
 
 - [Основной пайплайн](./readme.md)
-- [Диагностика](./diagnostics.md)
-- [Troubleshooting](./troubleshooting.md)
+- [Диагностика](./diagnostics.md) — как запускать `diag:*`-джобы, в том числе `diag:monitoring`
+- [Helm: деплой и troubleshooting](../helm/deployment.md) — что делать при `Forbidden` на `configmaps` и при провале `helm upgrade`
 - [Infrastructure: CI/CD RBAC](../infrastructure/readme.md) — что создаёт `setup-ci-rbac.sh`
+- [GitLab Docs: Predefined variables](https://docs.gitlab.com/ee/ci/variables/predefined_variables.html)
 - [GitLab Docs: CI/CD Variables](https://docs.gitlab.com/ee/ci/variables/)

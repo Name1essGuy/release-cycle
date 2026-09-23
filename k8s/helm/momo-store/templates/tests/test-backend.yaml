@@ -1,0 +1,31 @@
+{{- if .Values.backend.enabled }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "momo-store.fullname" . }}-test-backend
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "momo-store.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  containers:
+    - name: test-backend
+      image: curlimages/curl:8.10.1
+      command:
+        - sh
+        - -c
+        - |
+          set -e
+          URL="http://{{ include "momo-store.fullname" . }}-backend:{{ .Values.backend.service.port }}"
+          echo "Testing backend at $URL/health..."
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$URL/health")
+          echo "HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ Backend /health returned $HTTP_CODE (expected 200)"
+            exit 1
+          fi
+          echo "✅ Backend is healthy"
+{{- end }}

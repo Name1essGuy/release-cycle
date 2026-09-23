@@ -32,6 +32,20 @@ spec:
           - name: nginx-config
             mountPath: /etc/nginx/conf.d/default.conf
             subPath: default.conf
+        {{- with .Values.frontend.probes }}
+        livenessProbe:
+          httpGet:
+            path: {{ .liveness.path }}
+            port: {{ .liveness.port }}
+          initialDelaySeconds: {{ .liveness.initialDelaySeconds }}
+          periodSeconds: {{ .liveness.periodSeconds }}
+        readinessProbe:
+          httpGet:
+            path: {{ .readiness.path }}
+            port: {{ .readiness.port }}
+          initialDelaySeconds: {{ .readiness.initialDelaySeconds }}
+          periodSeconds: {{ .readiness.periodSeconds }}
+        {{- end }}
         resources:
           {{- toYaml .Values.frontend.resources | nindent 10 }}
       volumes:

@@ -70,6 +70,17 @@ frontend:
     requests:
       cpu: 100m
       memory: 128Mi
+  probes:
+    liveness:
+      path: /healthz
+      port: 80
+      initialDelaySeconds: 10
+      periodSeconds: 10
+    readiness:
+      path: /healthz
+      port: 80
+      initialDelaySeconds: 5
+      periodSeconds: 5
 
 # ============================================================================
 # Ingress

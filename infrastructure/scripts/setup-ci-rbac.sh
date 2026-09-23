@@ -113,6 +113,13 @@ rules:
     resources:
       - horizontalpodautoscalers
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # ServiceMonitor
+  - apiGroups: ["monitoring.coreos.com"]
+    resources:
+      - prometheusrules
+      - servicemonitors
+      - podmonitors
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

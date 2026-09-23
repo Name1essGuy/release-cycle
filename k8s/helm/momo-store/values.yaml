@@ -90,3 +90,24 @@ ingress:
           pathType: Prefix
           service: frontend
           port: 80
+
+# ============================================================================
+# Monitoring (Prometheus + Grafana)
+# ============================================================================
+
+monitoring:
+  enabled: true
+  releaseLabel: monitoring   # должно совпадать с helm-релизом kube-prometheus-stack
+
+  alerting:
+    enabled: true
+    email: ""   # Переопределяется через GRAFANA_SMTP_EMAIL при деплое
+
+  serviceMonitor:
+    enabled: true
+
+  dashboard:
+    enabled: true
+
+  prometheusRule:
+    enabled: true

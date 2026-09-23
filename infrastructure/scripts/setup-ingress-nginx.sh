@@ -92,6 +92,9 @@ helm upgrade --install "${RELEASE_NAME}" ingress-nginx/ingress-nginx \
     --set controller.admissionWebhooks.enabled=false \
     --set controller.config.use-proxy-protocol=false \
     --set controller.config.use-forwarded-headers=true \
+    --set controller.metrics.enabled=true \
+    --set controller.metrics.serviceMonitor.enabled=true \
+    --set controller.metrics.serviceMonitor.additionalLabels.release="monitoring" \
     --wait \
     --timeout 5m
 

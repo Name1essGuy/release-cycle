@@ -1,0 +1,233 @@
+{{- if and .Values.monitoring .Values.monitoring.enabled .Values.monitoring.alerting .Values.monitoring.alerting.enabled }}
+{{- if not .Values.monitoring.alerting.email }}
+{{- fail "monitoring.alerting.email is required when monitoring.alerting.enabled=true" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "momo-store.fullname" . }}-grafana-alerting
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "momo-store.labels" . | nindent 4 }}
+    grafana_alert: "1"
+data:
+  # ==========================================================================
+  # Contact Points — куда отправлять алерты
+  # ==========================================================================
+  contact-points.yaml: |
+    apiVersion: 1
+    contactPoints:
+      - orgId: 1
+        name: gmail-alerts
+        receivers:
+          - uid: gmail-email
+            type: email
+            settings:
+              addresses: {{ .Values.monitoring.alerting.email | quote }}
+              singleEmail: false
+
+  # ==========================================================================
+  # Alert Rules — инфраструктурные (CPU, диск, сеть)
+  # ==========================================================================
+  alert-rules.yaml: |
+    apiVersion: 1
+    groups:
+      - orgId: 1
+        name: node-health
+        folder: Infrastructure
+        interval: 1m
+        rules:
+          # ------------------------------------------------------------------
+          # 1. CPU > 85%
+          # ------------------------------------------------------------------
+          - uid: node-high-cpu
+            title: "Node CPU usage > 85%"
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: (1 - avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) * 100
+                  instant: true
+                  intervalMs: 1000
+                  maxDataPoints: 43200
+              - refId: B
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        params: [85]
+                        type: gt
+                      operator:
+                        type: and
+                      query:
+                        params: [A]
+                      reducer:
+                        type: last
+            noDataState: OK
+            execErrState: Error
+            for: 5m
+            labels:
+              severity: warning
+              component: node
+            annotations:
+              summary: "High CPU on {{ "{{ $labels.instance }}" }}"
+              description: "CPU usage is {{ "{{ $value }}" }}% for 5 minutes."
+
+          # ------------------------------------------------------------------
+          # 2. Disk > 85%
+          # ------------------------------------------------------------------
+          - uid: node-disk-full
+            title: "Node disk usage > 85%"
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: (1 - node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"}) * 100
+                  instant: true
+                  intervalMs: 1000
+                  maxDataPoints: 43200
+              - refId: B
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        params: [85]
+                        type: gt
+                      operator:
+                        type: and
+                      query:
+                        params: [A]
+                      reducer:
+                        type: last
+            noDataState: OK
+            execErrState: Error
+            for: 10m
+            labels:
+              severity: warning
+              component: node
+            annotations:
+              summary: "Disk almost full on {{ "{{ $labels.instance }}" }} ({{ "{{ $labels.mountpoint }}" }})"
+              description: "Disk usage is {{ "{{ $value }}" }}%."
+
+          # ------------------------------------------------------------------
+          # 3. Network RX errors
+          # ------------------------------------------------------------------
+          - uid: node-net-rx-errors
+            title: "Node network receive errors"
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: rate(node_network_receive_errs_total[5m])
+                  instant: true
+                  intervalMs: 1000
+                  maxDataPoints: 43200
+              - refId: B
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        params: [10]
+                        type: gt
+                      operator:
+                        type: and
+                      query:
+                        params: [A]
+                      reducer:
+                        type: last
+            noDataState: OK
+            execErrState: Error
+            for: 5m
+            labels:
+              severity: warning
+              component: node
+            annotations:
+              summary: "Network RX errors on {{ "{{ $labels.instance }}" }} ({{ "{{ $labels.device }}" }})"
+              description: "{{ "{{ $value }}" }} errors/sec."
+
+          # ------------------------------------------------------------------
+          # 4. Network TX errors
+          # ------------------------------------------------------------------
+          - uid: node-net-tx-errors
+            title: "Node network transmit errors"
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: rate(node_network_transmit_errs_total[5m])
+                  instant: true
+                  intervalMs: 1000
+                  maxDataPoints: 43200
+              - refId: B
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        params: [10]
+                        type: gt
+                      operator:
+                        type: and
+                      query:
+                        params: [A]
+                      reducer:
+                        type: last
+            noDataState: OK
+            execErrState: Error
+            for: 5m
+            labels:
+              severity: warning
+              component: node
+            annotations:
+              summary: "Network TX errors on {{ "{{ $labels.instance }}" }} ({{ "{{ $labels.device }}" }})"
+              description: "{{ "{{ $value }}" }} errors/sec."
+
+  # ==========================================================================
+  # Notification Policies
+  # ==========================================================================
+  notification-policies.yaml: |
+    apiVersion: 1
+    policies:
+      - orgId: 1
+        receiver: gmail-alerts
+        group_by: ['alertname', 'severity']
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 4h
+        routes: []
+{{- end }}
